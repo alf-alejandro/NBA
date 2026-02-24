@@ -128,7 +128,7 @@ def index():
 def start_dashboard():
     """Start Flask in a daemon thread (called from bot.py)."""
     t = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False),
+        target=lambda: _serve(),
         daemon=True,
     )
     t.start()
@@ -138,3 +138,14 @@ def start_dashboard():
 if __name__ == "__main__":
     print(f"Starting dashboard on port {PORT}...")
     app.run(host="0.0.0.0", port=PORT, debug=False)
+
+
+def _serve():
+    """Use waitress (production WSGI) instead of Flask dev server."""
+    try:
+        from waitress import serve as waitress_serve
+        print(f"Dashboard serving on http://0.0.0.0:{PORT} (waitress)")
+        waitress_serve(app, host="0.0.0.0", port=PORT, threads=4)
+    except ImportError:
+        # Fallback to Flask dev server if waitress not installed
+        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
