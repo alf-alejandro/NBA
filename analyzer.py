@@ -1,7 +1,7 @@
 """
 GeminiAnalyzer
 ==============
-Uses Gemini 2.5 Pro (with Google Search grounding) to:
+Uses Gemini 3.1 Pro (with Google Search grounding) to:
   1. Morning → find today's NBA games, injury reports, Vegas odds, Polymarket prices
   2. Evening → find final scores and resolve open bets
 """
@@ -9,6 +9,7 @@ Uses Gemini 2.5 Pro (with Google Search grounding) to:
 import json
 import logging
 import re
+import time
 from typing import Any
 from datetime import date
 
@@ -103,31 +104,51 @@ class GeminiAnalyzer:
         self.client = genai.Client(api_key=api_key)
         self.model  = "gemini-3.1-pro-preview"
 
-    def _call(self, prompt: str) -> str:
-        """Call Gemini with Google Search grounding and HIGH thinking."""
+    def _call(self, prompt: str, max_retries: int = 4) -> str:
+        """Call Gemini with Google Search grounding, HIGH thinking, and retry on 429."""
         contents = [
             types.Content(
                 role="user",
                 parts=[types.Part.from_text(text=prompt)],
             )
         ]
-        tools = [types.Tool(googleSearch=types.GoogleSearch())]
+        tools  = [types.Tool(googleSearch=types.GoogleSearch())]
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
             tools=tools,
         )
 
-        full_response = ""
-        for chunk in self.client.models.generate_content_stream(
-            model=self.model,
-            contents=contents,
-            config=config,
-        ):
-            if chunk.text:
-                full_response += chunk.text
+        for attempt in range(1, max_retries + 1):
+            try:
+                full_response = ""
+                for chunk in self.client.models.generate_content_stream(
+                    model=self.model,
+                    contents=contents,
+                    config=config,
+                ):
+                    if chunk.text:
+                        full_response += chunk.text
+                return full_response.strip()
 
-        return full_response.strip()
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = "429" in str(e) or "quota" in err_str or "resource_exhausted" in err_str
+                is_server_err = "500" in str(e) or "503" in str(e) or "unavailable" in err_str
+
+                if (is_rate_limit or is_server_err) and attempt < max_retries:
+                    wait = 2 ** attempt * 15   # 30s, 60s, 120s
+                    log.warning(
+                        "⏳  Gemini %s (attempt %d/%d). Retrying in %ds...",
+                        "rate limited" if is_rate_limit else "server error",
+                        attempt, max_retries, wait
+                    )
+                    time.sleep(wait)
+                else:
+                    log.error("❌  Gemini call failed after %d attempts: %s", attempt, e)
+                    raise
+
+        raise RuntimeError("Gemini _call exhausted all retries")
 
     # ── Morning ───────────────────────────────────────────────────────────────
     def morning_analysis(self) -> str:
@@ -138,9 +159,7 @@ class GeminiAnalyzer:
     def parse_games(self, raw: str) -> list[dict]:
         """Extract JSON array from Gemini response."""
         try:
-            # Strip markdown fences if model included them anyway
             cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
-            # Find JSON array
             start = cleaned.find("[")
             end   = cleaned.rfind("]") + 1
             if start == -1 or end == 0:
