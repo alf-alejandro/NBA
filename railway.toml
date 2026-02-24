@@ -1,0 +1,16 @@
+# railway.toml — NBA Edge Alpha Bot
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python bot.py"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5
+
+[[services]]
+name = "nba-edge-alpha"
+
+[services.networking]
+[[services.networking.tcpProxies]]
+applicationPort = 8080

@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NBA Edge Alpha — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne+Mono&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #080b10;
+    --bg2:       #0d1117;
+    --bg3:       #111820;
+    --border:    #1e2d3d;
+    --accent:    #00e5ff;
+    --accent2:   #7fff6e;
+    --warn:      #ffb347;
+    --danger:    #ff4d6d;
+    --text:      #c9d8e8;
+    --text-dim:  #4a6070;
+    --text-mid:  #7a9ab0;
+    --mono:      'Syne Mono', monospace;
+    --sans:      'DM Sans', sans-serif;
+    --glow:      0 0 20px rgba(0,229,255,0.15);
+    --glow2:     0 0 20px rgba(127,255,110,0.12);
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.03) 2px,
+      rgba(0,0,0,0.03) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo-icon {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, var(--accent), #0077ff);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    box-shadow: var(--glow);
+  }
+
+  .logo-text {
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+  }
+
+  .logo-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  #bot-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .status-dot.sleeping { background: var(--warn); animation: pulse-warn 2s infinite; }
+  .status-dot.morning  { background: var(--accent); animation: pulse-cyan 1s infinite; }
+  .status-dot.evening  { background: var(--accent2); animation: pulse-green 1s infinite; }
+  .status-dot.starting { background: var(--danger); animation: pulse-warn 0.5s infinite; }
+  .status-dot.healthcheck { background: #b47fff; animation: pulse-warn 0.8s infinite; }
+
+  @keyframes pulse-warn  { 0%,100%{opacity:1} 50%{opacity:.3} }
+  @keyframes pulse-cyan  { 0%,100%{opacity:1} 50%{opacity:.4} }
+  @keyframes pulse-green { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  #last-update {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* ── Layout ── */
+  .main {
+    padding: 20px 28px;
+    display: grid;
+    gap: 16px;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+
+  /* ── KPI row ── */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+  }
+
+  .kpi {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+  .kpi:hover { border-color: var(--accent); }
+  .kpi::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    opacity: 0;
+    transition: opacity .2s;
+  }
+  .kpi:hover::after { opacity: 1; }
+
+  .kpi-label {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .kpi-value {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 400;
+    line-height: 1;
+    color: var(--text);
+  }
+
+  .kpi-value.green  { color: var(--accent2); text-shadow: var(--glow2); }
+  .kpi-value.red    { color: var(--danger); }
+  .kpi-value.cyan   { color: var(--accent); text-shadow: var(--glow); }
+  .kpi-value.yellow { color: var(--warn); }
+
+  .kpi-sub {
+    font-size: 10px;
+    color: var(--text-mid);
+    margin-top: 6px;
+  }
+
+  /* ── 2-col section ── */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1.6fr;
+    gap: 16px;
+  }
+
+  .three-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+  }
+
+  /* ── Panel ── */
+  .panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg3);
+  }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .panel-badge {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(0,229,255,0.08);
+    color: var(--accent);
+    border: 1px solid rgba(0,229,255,0.2);
+  }
+
+  .panel-body {
+    padding: 16px 18px;
+  }
+
+  /* ── Chart ── */
+  #pnl-chart-wrap {
+    height: 160px;
+    position: relative;
+  }
+  #pnl-canvas {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ── Bet table ── */
+  .bet-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .bet-table th {
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bet-table td {
+    padding: 10px 10px;
+    border-bottom: 1px solid rgba(30,45,61,0.5);
+    font-family: var(--mono);
+    font-size: 11px;
+    vertical-align: middle;
+  }
+
+  .bet-table tr:last-child td { border-bottom: none; }
+  .bet-table tbody tr { transition: background .15s; }
+  .bet-table tbody tr:hover { background: rgba(0,229,255,0.03); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-family: var(--mono);
+  }
+
+  .badge-open    { background: rgba(255,179,71,0.12); color: var(--warn);    border: 1px solid rgba(255,179,71,0.25); }
+  .badge-win     { background: rgba(127,255,110,0.1); color: var(--accent2); border: 1px solid rgba(127,255,110,0.2); }
+  .badge-loss    { background: rgba(255,77,109,0.1);  color: var(--danger);  border: 1px solid rgba(255,77,109,0.2); }
+  .badge-buy     { background: rgba(0,229,255,0.1);   color: var(--accent);  border: 1px solid rgba(0,229,255,0.2); }
+  .badge-neutral { background: rgba(120,120,120,0.1); color: #888;           border: 1px solid #333; }
+
+  .nea-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .nea-track {
+    width: 60px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .nea-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent2);
+    transition: width .4s;
+  }
+  .nea-fill.red { background: var(--danger); }
+
+  /* ── Log terminal ── */
+  #log-terminal {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    line-height: 1.7;
+    color: var(--text-mid);
+    height: 340px;
+    overflow-y: auto;
+    padding: 14px 16px;
+    scroll-behavior: smooth;
+  }
+  #log-terminal::-webkit-scrollbar { width: 4px; }
+  #log-terminal::-webkit-scrollbar-track { background: transparent; }
+  #log-terminal::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .log-line { display: block; }
+  .log-line.info    { color: var(--text-mid); }
+  .log-line.warning { color: var(--warn); }
+  .log-line.error   { color: var(--danger); }
+  .log-line.success { color: var(--accent2); }
+  .log-line.bet     { color: var(--accent); }
+  .log-line.sleep   { color: #5a6a7a; font-style: italic; }
+  .log-line.session { color: var(--accent); font-weight: bold; }
+
+  /* Mini win/loss gauge */
+  .gauge-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 18px;
+  }
+
+  .gauge-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .gauge-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--text-mid);
+    width: 50px;
+    flex-shrink: 0;
+  }
+
+  .gauge-track {
+    flex: 1;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .gauge-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+  }
+
+  .gauge-fill.green { background: linear-gradient(90deg, var(--accent2), #3fff80); }
+  .gauge-fill.red   { background: linear-gradient(90deg, var(--danger), #ff8fa3); }
+  .gauge-fill.cyan  { background: linear-gradient(90deg, var(--accent), #00aaff); }
+
+  .gauge-val {
+    font-family: var(--mono);
+    font-size: 11px;
+    width: 40px;
+    text-align: right;
+    color: var(--text);
+  }
+
+  /* Capital ring */
+  .ring-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    position: relative;
+  }
+
+  .ring-svg { transform: rotate(-90deg); }
+  .ring-center {
+    position: absolute;
+    text-align: center;
+  }
+  .ring-center-val {
+    font-family: var(--mono);
+    font-size: 20px;
+    color: var(--accent);
+    display: block;
+  }
+  .ring-center-label {
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    display: block;
+    margin-top: 2px;
+  }
+
+  /* ── Today card ── */
+  .today-bet-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    background: var(--bg3);
+    transition: border-color .2s;
+  }
+  .today-bet-card:hover { border-color: var(--accent); }
+  .today-bet-card:last-child { margin-bottom: 0; }
+
+  .tbc-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .tbc-teams {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+  }
+
+  .tbc-amount {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--warn);
+  }
+
+  .tbc-meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .tbc-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .tbc-item-label {
+    font-size: 8px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .tbc-item-val {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  .tbc-rationale {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-mid);
+    line-height: 1.5;
+    font-style: italic;
+    border-left: 2px solid var(--border);
+    padding-left: 10px;
+  }
+
+  /* ── Empty state ── */
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-dim);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 1200px) {
+    .kpi-row { grid-template-columns: repeat(3, 1fr); }
+    .two-col  { grid-template-columns: 1fr; }
+    .three-col { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 700px) {
+    .kpi-row   { grid-template-columns: repeat(2, 1fr); }
+    .three-col { grid-template-columns: 1fr; }
+    header     { padding: 12px 16px; }
+    .main      { padding: 12px 16px; }
+  }
+
+  /* Entrance animation */
+  .fade-in {
+    animation: fadeIn 0.4s ease both;
+  }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+
+  .stagger-1 { animation-delay: 0.05s; }
+  .stagger-2 { animation-delay: 0.10s; }
+  .stagger-3 { animation-delay: 0.15s; }
+  .stagger-4 { animation-delay: 0.20s; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🏀</div>
+    <div>
+      <div class="logo-text">NBA EDGE ALPHA</div>
+      <div class="logo-sub">Polymarket Simulation Dashboard</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div id="bot-status">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-label">CONNECTING...</span>
+    </div>
+    <div id="last-update">--</div>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- KPI Row -->
+  <div class="kpi-row fade-in">
+    <div class="kpi">
+      <div class="kpi-label">Capital</div>
+      <div class="kpi-value cyan" id="kpi-capital">$--</div>
+      <div class="kpi-sub" id="kpi-capital-sub">started at $20.00</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Total PnL</div>
+      <div class="kpi-value" id="kpi-pnl">$--</div>
+      <div class="kpi-sub" id="kpi-roi">ROI: --%</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Win Rate</div>
+      <div class="kpi-value" id="kpi-winrate">--%</div>
+      <div class="kpi-sub" id="kpi-wl">-- wins / -- losses</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Total Bets</div>
+      <div class="kpi-value cyan" id="kpi-totalbets">--</div>
+      <div class="kpi-sub" id="kpi-openbets">-- open today</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Exposure</div>
+      <div class="kpi-value yellow" id="kpi-exposure">--%</div>
+      <div class="kpi-sub">max 50% allowed</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Bot Status</div>
+      <div class="kpi-value" id="kpi-status-val" style="font-size:18px">--</div>
+      <div class="kpi-sub" id="kpi-time">--</div>
+    </div>
+  </div>
+
+  <!-- PnL Chart + Stats -->
+  <div class="two-col fade-in stagger-1">
+
+    <!-- Left: ring + gauges -->
+    <div style="display:flex;flex-direction:column;gap:16px;">
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Capital Deployment</span>
+        </div>
+        <div class="ring-wrap">
+          <svg class="ring-svg" width="130" height="130" viewBox="0 0 130 130">
+            <circle cx="65" cy="65" r="55" fill="none" stroke="#1e2d3d" stroke-width="10"/>
+            <circle cx="65" cy="65" r="55" fill="none" stroke="#00e5ff" stroke-width="10"
+              stroke-dasharray="345.4" stroke-dashoffset="345.4"
+              stroke-linecap="round" id="ring-circle"
+              style="transition: stroke-dashoffset 1s cubic-bezier(0.4,0,0.2,1)"/>
+          </svg>
+          <div class="ring-center">
+            <span class="ring-center-val" id="ring-val">0%</span>
+            <span class="ring-center-label">exposed</span>
+          </div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-row">
+            <span class="gauge-label">Wins</span>
+            <div class="gauge-track"><div class="gauge-fill green" id="g-wins" style="width:0%"></div></div>
+            <span class="gauge-val green" id="gv-wins">0</span>
+          </div>
+          <div class="gauge-row">
+            <span class="gauge-label">Losses</span>
+            <div class="gauge-track"><div class="gauge-fill red" id="g-losses" style="width:0%"></div></div>
+            <span class="gauge-val" style="color:var(--danger)" id="gv-losses">0</span>
+          </div>
+          <div class="gauge-row">
+            <span class="gauge-label">Open</span>
+            <div class="gauge-track"><div class="gauge-fill cyan" id="g-open" style="width:0%"></div></div>
+            <span class="gauge-val cyan" id="gv-open">0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: PnL Chart -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Cumulative PnL</span>
+        <span class="panel-badge" id="chart-badge">$0.00</span>
+      </div>
+      <div class="panel-body" style="padding:16px 12px 8px;">
+        <div id="pnl-chart-wrap">
+          <canvas id="pnl-canvas"></canvas>
+        </div>
+        <div style="text-align:center;font-size:9px;letter-spacing:0.12em;color:var(--text-dim);margin-top:8px;">
+          DAILY CUMULATIVE PnL (USD)
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Today's bets + History table -->
+  <div class="two-col fade-in stagger-2">
+
+    <!-- Today's bets -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Today's Bets</span>
+        <span class="panel-badge" id="today-count">0 bets</span>
+      </div>
+      <div class="panel-body" id="todays-bets-container" style="max-height:340px;overflow-y:auto;">
+        <div class="empty-state">No bets placed today yet</div>
+      </div>
+    </div>
+
+    <!-- All bets history -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Bet History</span>
+        <span class="panel-badge">last 50</span>
+      </div>
+      <div style="overflow-x:auto;max-height:340px;overflow-y:auto;">
+        <table class="bet-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Match</th>
+              <th>Bet On</th>
+              <th>Price</th>
+              <th>NEA</th>
+              <th>Amount</th>
+              <th>Status</th>
+              <th>PnL</th>
+            </tr>
+          </thead>
+          <tbody id="bet-history-body">
+            <tr><td colspan="8" class="empty-state">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log terminal -->
+  <div class="panel fade-in stagger-3">
+    <div class="panel-header">
+      <span class="panel-title">Bot Log — Live</span>
+      <span class="panel-badge" id="log-badge">0 lines</span>
+    </div>
+    <div id="log-terminal"></div>
+  </div>
+
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let pnlHistory  = [];
+let canvasCtx   = null;
+let animFrame   = null;
+
+// ── Init canvas ────────────────────────────────────────────────────────────
+function initCanvas() {
+  const canvas = document.getElementById('pnl-canvas');
+  const wrap   = document.getElementById('pnl-chart-wrap');
+  canvas.width  = wrap.clientWidth  * devicePixelRatio;
+  canvas.height = wrap.clientHeight * devicePixelRatio;
+  canvas.style.width  = wrap.clientWidth  + 'px';
+  canvas.style.height = wrap.clientHeight + 'px';
+  canvasCtx = canvas.getContext('2d');
+  canvasCtx.scale(devicePixelRatio, devicePixelRatio);
+}
+
+// ── Draw PnL chart ─────────────────────────────────────────────────────────
+function drawChart(history) {
+  if (!canvasCtx) return;
+  const canvas = document.getElementById('pnl-canvas');
+  const W = canvas.width  / devicePixelRatio;
+  const H = canvas.height / devicePixelRatio;
+  canvasCtx.clearRect(0, 0, W, H);
+
+  if (!history || history.length === 0) {
+    canvasCtx.fillStyle = '#4a6070';
+    canvasCtx.font = '11px Syne Mono, monospace';
+    canvasCtx.textAlign = 'center';
+    canvasCtx.fillText('No data yet', W/2, H/2);
+    return;
+  }
+
+  // Add start point at 0
+  const pts = [{date: 'start', pnl: 0}, ...history];
+  const values = pts.map(p => p.pnl);
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+  const range = maxV - minV || 1;
+  const pad = { t: 16, b: 24, l: 46, r: 12 };
+  const cW = W - pad.l - pad.r;
+  const cH = H - pad.t - pad.b;
+
+  const toX = i  => pad.l + (i / (pts.length - 1)) * cW;
+  const toY = v  => pad.t + cH - ((v - minV) / range) * cH;
+
+  // Zero line
+  const zeroY = toY(0);
+  canvasCtx.strokeStyle = '#1e2d3d';
+  canvasCtx.lineWidth = 1;
+  canvasCtx.setLineDash([4, 4]);
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(pad.l, zeroY);
+  canvasCtx.lineTo(W - pad.r, zeroY);
+  canvasCtx.stroke();
+  canvasCtx.setLineDash([]);
+
+  // Gradient fill
+  const lastVal = values[values.length - 1];
+  const isPos   = lastVal >= 0;
+  const grad    = canvasCtx.createLinearGradient(0, pad.t, 0, H - pad.b);
+  if (isPos) {
+    grad.addColorStop(0,   'rgba(127,255,110,0.22)');
+    grad.addColorStop(0.6, 'rgba(127,255,110,0.04)');
+    grad.addColorStop(1,   'rgba(127,255,110,0)');
+  } else {
+    grad.addColorStop(0,   'rgba(255,77,109,0.22)');
+    grad.addColorStop(0.6, 'rgba(255,77,109,0.04)');
+    grad.addColorStop(1,   'rgba(255,77,109,0)');
+  }
+
+  canvasCtx.beginPath();
+  pts.forEach((p, i) => {
+    const x = toX(i), y = toY(p.pnl);
+    i === 0 ? canvasCtx.moveTo(x, y) : canvasCtx.lineTo(x, y);
+  });
+  canvasCtx.lineTo(toX(pts.length - 1), H - pad.b);
+  canvasCtx.lineTo(pad.l, H - pad.b);
+  canvasCtx.closePath();
+  canvasCtx.fillStyle = grad;
+  canvasCtx.fill();
+
+  // Line
+  canvasCtx.beginPath();
+  pts.forEach((p, i) => {
+    const x = toX(i), y = toY(p.pnl);
+    i === 0 ? canvasCtx.moveTo(x, y) : canvasCtx.lineTo(x, y);
+  });
+  canvasCtx.strokeStyle = isPos ? '#7fff6e' : '#ff4d6d';
+  canvasCtx.lineWidth = 2;
+  canvasCtx.lineJoin = 'round';
+  canvasCtx.stroke();
+
+  // Dots
+  pts.forEach((p, i) => {
+    if (i === 0) return;
+    canvasCtx.beginPath();
+    canvasCtx.arc(toX(i), toY(p.pnl), 3, 0, Math.PI * 2);
+    canvasCtx.fillStyle = isPos ? '#7fff6e' : '#ff4d6d';
+    canvasCtx.fill();
+  });
+
+  // Y axis labels
+  canvasCtx.fillStyle = '#4a6070';
+  canvasCtx.font = '9px Syne Mono, monospace';
+  canvasCtx.textAlign = 'right';
+  [minV, 0, maxV].forEach(v => {
+    const y = toY(v);
+    canvasCtx.fillText((v >= 0 ? '+' : '') + v.toFixed(2), pad.l - 6, y + 3);
+  });
+
+  // X axis labels (dates)
+  canvasCtx.textAlign = 'center';
+  pts.forEach((p, i) => {
+    if (i === 0) return;
+    if (pts.length > 8 && i % Math.ceil(pts.length / 6) !== 0 && i !== pts.length - 1) return;
+    const label = p.date === 'start' ? '' : p.date.slice(5);
+    canvasCtx.fillText(label, toX(i), H - pad.b + 14);
+  });
+}
+
+// ── Update KPIs ────────────────────────────────────────────────────────────
+function updateKPIs(d) {
+  const pnl = d.total_pnl;
+  const roi = d.roi_pct;
+
+  setText('kpi-capital',    '$' + d.capital.toFixed(2));
+  setClass('kpi-capital', 'kpi-value cyan');
+
+  const pnlEl = document.getElementById('kpi-pnl');
+  pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+  pnlEl.className = 'kpi-value ' + (pnl >= 0 ? 'green' : 'red');
+
+  const roiEl = document.getElementById('kpi-roi');
+  roiEl.textContent = 'ROI: ' + (roi >= 0 ? '+' : '') + roi.toFixed(1) + '%';
+  roiEl.style.color = roi >= 0 ? 'var(--accent2)' : 'var(--danger)';
+
+  const wrEl = document.getElementById('kpi-winrate');
+  wrEl.textContent = d.win_rate.toFixed(0) + '%';
+  wrEl.className = 'kpi-value ' + (d.win_rate >= 55 ? 'green' : d.win_rate >= 45 ? '' : 'red');
+  setText('kpi-wl', d.wins + ' wins / ' + d.losses + ' losses');
+
+  setText('kpi-totalbets', d.total_bets);
+  setText('kpi-openbets', d.open_bets + ' open today');
+
+  const expEl = document.getElementById('kpi-exposure');
+  expEl.textContent = d.exposure_pct.toFixed(0) + '%';
+  expEl.className = 'kpi-value ' + (d.exposure_pct > 40 ? 'red' : 'yellow');
+
+  const statusMap = {
+    SLEEPING: { label: '💤 SLEEPING', cls: 'sleeping', kv: '#ffb347' },
+    MORNING:  { label: '🌅 MORNING',  cls: 'morning',  kv: '#00e5ff' },
+    EVENING:  { label: '🌙 EVENING',  cls: 'evening',  kv: '#7fff6e' },
+    STARTING: { label: '🔬 STARTING', cls: 'starting', kv: '#ff4d6d' },
+    HEALTHCHECK:{ label: '🔬 HEALTH', cls: 'healthcheck', kv: '#b47fff' },
+    IDLE:     { label: '⏸ IDLE',     cls: '',          kv: '#7a9ab0' },
+  };
+  const st = statusMap[d.status] || statusMap['IDLE'];
+  setText('kpi-status-val', st.label);
+  document.getElementById('kpi-status-val').style.color = st.kv;
+  setText('kpi-time', new Date(d.timestamp).toLocaleTimeString());
+
+  // Header status
+  setText('status-label', d.status);
+  const dot = document.getElementById('status-dot');
+  dot.className = 'status-dot ' + st.cls.toLowerCase();
+  setText('last-update', 'Updated ' + new Date().toLocaleTimeString());
+
+  // Ring
+  const pct = Math.min(d.exposure_pct, 100);
+  const circumference = 345.4;
+  const offset = circumference - (pct / 100) * circumference;
+  document.getElementById('ring-circle').style.strokeDashoffset = offset;
+  document.getElementById('ring-circle').style.stroke =
+    pct > 40 ? 'var(--danger)' : pct > 20 ? 'var(--warn)' : 'var(--accent)';
+  setText('ring-val', pct.toFixed(0) + '%');
+
+  // Gauges
+  const total = d.wins + d.losses + d.open_bets || 1;
+  setWidth('g-wins',   (d.wins    / total * 100) + '%');
+  setWidth('g-losses', (d.losses  / total * 100) + '%');
+  setWidth('g-open',   (d.open_bets / total * 100) + '%');
+  setText('gv-wins',   d.wins);
+  setText('gv-losses', d.losses);
+  setText('gv-open',   d.open_bets);
+}
+
+// ── Today's bets ──────────────────────────────────────────────────────────
+function updateTodayBets(bets) {
+  const container = document.getElementById('todays-bets-container');
+  const badge     = document.getElementById('today-count');
+  badge.textContent = bets.length + ' bet' + (bets.length !== 1 ? 's' : '');
+
+  if (!bets.length) {
+    container.innerHTML = '<div class="empty-state">No bets placed today yet</div>';
+    return;
+  }
+
+  container.innerHTML = bets.map(b => {
+    const statusClass = b.status === 'OPEN' ? 'badge-open' : (b.pnl > 0 ? 'badge-win' : 'badge-loss');
+    const statusLabel = b.status === 'OPEN' ? 'OPEN' : (b.pnl > 0 ? 'WIN' : 'LOSS');
+    const neaColor    = b.nea_score < -5 ? 'var(--accent2)' : b.nea_score > 5 ? 'var(--danger)' : 'var(--warn)';
+    const pnlStr      = b.pnl !== null ? ((b.pnl >= 0 ? '+$' : '-$') + Math.abs(b.pnl).toFixed(2)) : '--';
+
+    return `
+    <div class="today-bet-card">
+      <div class="tbc-top">
+        <span class="tbc-teams">${b.away} <span style="color:var(--text-dim)">@</span> ${b.home}</span>
+        <span class="tbc-amount">$${b.amount_usd.toFixed(2)}</span>
+      </div>
+      <div class="tbc-meta">
+        <div class="tbc-item">
+          <span class="tbc-item-label">Bet On</span>
+          <span class="tbc-item-val" style="color:var(--accent)">${b.bet_on}</span>
+        </div>
+        <div class="tbc-item">
+          <span class="tbc-item-label">Price</span>
+          <span class="tbc-item-val">${b.poly_price}¢</span>
+        </div>
+        <div class="tbc-item">
+          <span class="tbc-item-label">NEA Score</span>
+          <span class="tbc-item-val" style="color:${neaColor}">${b.nea_score > 0 ? '+' : ''}${b.nea_score}</span>
+        </div>
+        <div class="tbc-item">
+          <span class="tbc-item-label">Status</span>
+          <span class="badge ${statusClass}">${statusLabel}</span>
+        </div>
+        <div class="tbc-item">
+          <span class="tbc-item-label">PnL</span>
+          <span class="tbc-item-val" style="color:${b.pnl > 0 ? 'var(--accent2)' : b.pnl < 0 ? 'var(--danger)' : 'var(--text-mid)'}">${pnlStr}</span>
+        </div>
+      </div>
+      ${b.rationale ? `<div class="tbc-rationale">${b.rationale}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ── Bet history table ──────────────────────────────────────────────────────
+function updateBetHistory(bets) {
+  const tbody = document.getElementById('bet-history-body');
+  if (!bets.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No bets yet</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = bets.map(b => {
+    const statusBadge = b.status === 'OPEN'
+      ? `<span class="badge badge-open">OPEN</span>`
+      : (b.pnl > 0 ? `<span class="badge badge-win">WIN</span>` : `<span class="badge badge-loss">LOSS</span>`);
+
+    const pnl = b.pnl !== null
+      ? `<span style="color:${b.pnl >= 0 ? 'var(--accent2)' : 'var(--danger)'}">
+           ${b.pnl >= 0 ? '+' : ''}$${Math.abs(b.pnl).toFixed(2)}
+         </span>`
+      : '<span style="color:var(--text-dim)">--</span>';
+
+    const neaColor = b.nea_score < -5 ? 'var(--accent2)' : b.nea_score > 5 ? 'var(--danger)' : 'var(--warn)';
+    const neaTrack = Math.min(Math.abs(b.nea_score) / 20 * 100, 100);
+
+    return `<tr>
+      <td style="color:var(--text-mid)">${b.date ? b.date.slice(5) : '--'}</td>
+      <td>${b.away} @ ${b.home}</td>
+      <td style="color:var(--accent)">${b.bet_on}</td>
+      <td>${b.poly_price}¢</td>
+      <td>
+        <div class="nea-bar">
+          <div class="nea-track">
+            <div class="nea-fill ${b.nea_score > 0 ? 'red' : ''}" style="width:${neaTrack}%"></div>
+          </div>
+          <span style="color:${neaColor};font-size:10px">${b.nea_score > 0 ? '+' : ''}${b.nea_score}</span>
+        </div>
+      </td>
+      <td style="color:var(--warn)">$${b.amount_usd.toFixed(2)}</td>
+      <td>${statusBadge}</td>
+      <td>${pnl}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Log ────────────────────────────────────────────────────────────────────
+function updateLog(lines) {
+  const terminal = document.getElementById('log-terminal');
+  const badge    = document.getElementById('log-badge');
+  badge.textContent = lines.length + ' lines';
+
+  const classify = line => {
+    const l = line.toLowerCase();
+    if (l.includes('✅') || l.includes('won') || l.includes('health check passed')) return 'success';
+    if (l.includes('❌') || l.includes('error') || l.includes('failed'))           return 'error';
+    if (l.includes('⚠') || l.includes('warning') || l.includes('warn'))           return 'warning';
+    if (l.includes('bet placed') || l.includes('bet:') || l.includes('🏀'))        return 'bet';
+    if (l.includes('sleeping') || l.includes('still sleeping') || l.includes('💤')) return 'sleep';
+    if (l.includes('session') || l.includes('🌅') || l.includes('🌙'))             return 'session';
+    return 'info';
+  };
+
+  const html = lines.map(line =>
+    `<span class="log-line ${classify(line)}">${escHtml(line)}</span>`
+  ).join('\n');
+
+  terminal.innerHTML = html;
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+// ── Fetch & render ─────────────────────────────────────────────────────────
+async function fetchState() {
+  try {
+    const res  = await fetch('/api/state');
+    const data = await res.json();
+
+    updateKPIs(data);
+    updateTodayBets(data.todays_bets || []);
+    updateBetHistory(data.all_bets   || []);
+
+    pnlHistory = data.pnl_history || [];
+    document.getElementById('chart-badge').textContent =
+      (data.total_pnl >= 0 ? '+$' : '-$') + Math.abs(data.total_pnl).toFixed(2);
+    drawChart(pnlHistory);
+  } catch (e) {
+    console.error('State fetch error:', e);
+    setText('status-label', 'OFFLINE');
+    document.getElementById('status-dot').className = 'status-dot starting';
+  }
+}
+
+async function fetchLog() {
+  try {
+    const res  = await fetch('/api/log');
+    const data = await res.json();
+    updateLog(data.lines || []);
+  } catch (e) {
+    console.error('Log fetch error:', e);
+  }
+}
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+function setClass(id, cls) {
+  const el = document.getElementById(id);
+  if (el) el.className = cls;
+}
+function setWidth(id, w) {
+  const el = document.getElementById(id);
+  if (el) el.style.width = w;
+}
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  initCanvas();
+  fetchState();
+  fetchLog();
+
+  // Refresh state every 15s, log every 8s
+  setInterval(fetchState, 15000);
+  setInterval(fetchLog,    8000);
+
+  window.addEventListener('resize', () => {
+    initCanvas();
+    drawChart(pnlHistory);
+  });
+});
+</script>
+</body>
+</html>
