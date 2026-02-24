@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from analyzer import GeminiAnalyzer
 from portfolio import Portfolio
 from polymarket import PolymarketClient
-from nea_formula import compute_nea, interpret_nea
+from nea_formula import compute_nea, compute_nea_breakdown, interpret_nea
 from healthcheck import run_health_check
 from dashboard_server import start_dashboard
 
@@ -150,20 +150,27 @@ def run_morning(portfolio: Portfolio, analyzer: GeminiAnalyzer, poly: Polymarket
         away = game.get("away", "?")
         log.info("--- %s vs %s ---", home, away)
 
-        nea_score = compute_nea(
-            p_poly  = game.get("poly_price",       50),
-            p_vegas = game.get("vegas_prob",        50),
-            n       = game.get("news_score",         0),
-            v       = game.get("home_away_factor",   0),
-            r       = game.get("streak_pct",        50),
-        )
-        signal = interpret_nea(nea_score)
-        log.info("  NEA = %+.2f → %s [%s]", nea_score, signal["action"], signal["confidence"])
+        p_poly  = game.get("poly_price",       50)
+        p_vegas = game.get("vegas_prob",        50)
+        n_score = game.get("news_score",         0)
+        v_factor= game.get("home_away_factor",   0)
+        r_pct   = game.get("streak_pct",        50)
+
+        bd      = compute_nea_breakdown(p_poly, p_vegas, n_score, v_factor, r_pct)
+        nea_score = bd["nea"]
+        signal  = interpret_nea(nea_score)
+
+        log.info("  📊  Datos crudos   → Poly=%d¢  Vegas=%.0f%%  News=%+d  Local=%+d  Racha=%.0f%%",
+                 p_poly, p_vegas, n_score, v_factor, r_pct)
+        log.info("  🧮  Prob real      → Vegas:%.1f + News:%.1f + Local:%.1f + Racha:%.1f = %.1f",
+                 bd["vegas_contrib"], bd["news_contrib"], bd["home_contrib"], bd["streak_contrib"], bd["real_prob"])
+        log.info("  🎯  NEA = %d - %.1f = %+.2f  →  %s [%s]",
+                 p_poly, bd["real_prob"], nea_score, signal["action"], signal["confidence"])
         log.info("  📰  %s", game.get("news_summary", "—"))
         log.info("  💡  %s", game.get("rationale",    "—"))
 
         if signal["action"] != "BUY":
-            log.info("  ⏭   No edge — skipping")
+            log.info("  ⏭   Sin ventaja (NEA=%+.2f, umbral BUY < -3) — descartado", nea_score)
             continue
 
         available  = portfolio.available_capital(MAX_TOTAL_EXPOSED)
