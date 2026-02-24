@@ -1,31 +1,31 @@
 """
 NBA Edge Alpha — Dashboard Server
 ===================================
-Servidor Flask ligero que expone:
-  GET /           → dashboard HTML
-  GET /api/state  → JSON con portfolio completo + log reciente + bot status
-  GET /api/log    → últimas N líneas del bot.log
-
-Corre en el mismo proceso que el bot (hilo separado) o como proceso independiente.
+Lee PORTFOLIO_FILE y LOG_FILE de variables de entorno
+para que apunte siempre al DATA_DIR correcto.
 """
 
 import os
 import json
 import threading
 from pathlib import Path
-from datetime import datetime
-from flask import Flask, jsonify, send_from_directory, Response
+from datetime import datetime, date
+from flask import Flask, jsonify, Response
 
-app = Flask(__name__, static_folder="static")
+app = Flask(__name__)
 
-PORTFOLIO_FILE = os.environ.get("PORTFOLIO_FILE", "portfolio.json")
-LOG_FILE       = os.environ.get("LOG_FILE",       "bot.log")
-HEALTH_FLAG    = ".health_ok"
-PORT           = int(os.environ.get("DASHBOARD_PORT", 8080))
+PORT = int(os.environ.get("DASHBOARD_PORT", 8080))
+
+
+def get_portfolio_file() -> Path:
+    return Path(os.environ.get("PORTFOLIO_FILE", "portfolio.json"))
+
+def get_log_file() -> Path:
+    return Path(os.environ.get("LOG_FILE", "bot.log"))
 
 
 def read_portfolio() -> dict:
-    p = Path(PORTFOLIO_FILE)
+    p = get_portfolio_file()
     if p.exists():
         try:
             return json.loads(p.read_text())
@@ -34,10 +34,10 @@ def read_portfolio() -> dict:
     return {"capital": 20.0, "initial": 20.0, "total_pnl": 0.0, "bets": []}
 
 
-def read_log(lines: int = 120) -> list[str]:
-    p = Path(LOG_FILE)
+def read_log(lines: int = 150) -> list:
+    p = get_log_file()
     if not p.exists():
-        return ["Bot log not found yet..."]
+        return ["Bot log not found yet — waiting for first session..."]
     try:
         all_lines = p.read_text(errors="replace").splitlines()
         return all_lines[-lines:]
@@ -46,31 +46,33 @@ def read_log(lines: int = 120) -> list[str]:
 
 
 def bot_status() -> str:
-    flag = Path(HEALTH_FLAG)
+    flag = get_portfolio_file().parent / ".health_ok"
     if not flag.exists():
         return "STARTING"
-    log_lines = read_log(5)
-    for line in reversed(log_lines):
+    lines = read_log(8)
+    for line in reversed(lines):
         l = line.lower()
         if "sleeping" in l or "still sleeping" in l:
             return "SLEEPING"
-        if "morning session" in l:
+        if "morning session" in l or "first boot" in l:
             return "MORNING"
         if "evening session" in l:
             return "EVENING"
         if "health check" in l:
             return "HEALTHCHECK"
+        if "retrying in 1 hour" in l:
+            return "WAITING_RESULTS"
     return "IDLE"
 
 
 @app.route("/api/state")
 def api_state():
-    data     = read_portfolio()
-    bets     = data.get("bets", [])
-    capital  = data.get("capital", 20.0)
-    initial  = data.get("initial", 20.0)
-    pnl      = data.get("total_pnl", 0.0)
-    roi      = ((capital - initial) / initial * 100) if initial else 0
+    data    = read_portfolio()
+    bets    = data.get("bets", [])
+    capital = data.get("capital", 20.0)
+    initial = data.get("initial", 20.0)
+    pnl     = data.get("total_pnl", 0.0)
+    roi     = ((capital - initial) / initial * 100) if initial else 0
 
     resolved = [b for b in bets if b.get("status") == "RESOLVED"]
     open_b   = [b for b in bets if b.get("status") == "OPEN"]
@@ -78,74 +80,64 @@ def api_state():
     losses   = [b for b in resolved if (b.get("pnl") or 0) <= 0]
     win_rate = (len(wins) / len(resolved) * 100) if resolved else 0
 
-    # PnL history for chart (cumulative by date)
+    # PnL histórico acumulativo por fecha
     from collections import defaultdict
-    daily = defaultdict(float)
-    cumulative = 0.0
-    pnl_history = []
+    cumulative  = 0.0
+    daily       = {}
     for b in sorted(resolved, key=lambda x: x.get("date", "")):
         cumulative += b.get("pnl", 0)
-        daily[b["date"]] = cumulative
-    for d, v in sorted(daily.items()):
-        pnl_history.append({"date": d, "pnl": round(v, 4)})
+        daily[b["date"]] = round(cumulative, 4)
+    pnl_history = [{"date": d, "pnl": v} for d, v in sorted(daily.items())]
 
-    # Today's bets
-    from datetime import date
-    today = str(date.today())
-    todays_bets = [b for b in bets if b.get("date") == today]
+    today_str   = str(date.today())
+    todays_bets = [b for b in bets if b.get("date") == today_str]
 
     return jsonify({
-        "status"     : bot_status(),
-        "timestamp"  : datetime.now().isoformat(),
-        "capital"    : round(capital, 4),
-        "initial"    : initial,
-        "total_pnl"  : round(pnl, 4),
-        "roi_pct"    : round(roi, 2),
-        "win_rate"   : round(win_rate, 1),
-        "total_bets" : len(bets),
-        "open_bets"  : len(open_b),
-        "wins"       : len(wins),
-        "losses"     : len(losses),
+        "status"      : bot_status(),
+        "timestamp"   : datetime.now().isoformat(),
+        "capital"     : round(capital, 4),
+        "initial"     : initial,
+        "total_pnl"   : round(pnl, 4),
+        "roi_pct"     : round(roi, 2),
+        "win_rate"    : round(win_rate, 1),
+        "total_bets"  : len(bets),
+        "open_bets"   : len(open_b),
+        "wins"        : len(wins),
+        "losses"      : len(losses),
         "exposure_pct": round((sum(b["amount_usd"] for b in open_b) / capital * 100) if capital else 0, 1),
-        "pnl_history": pnl_history,
-        "todays_bets": todays_bets,
-        "all_bets"   : list(reversed(bets[-50:])),   # last 50
+        "pnl_history" : pnl_history,
+        "todays_bets" : todays_bets,
+        "all_bets"    : list(reversed(bets[-50:])),
     })
 
 
 @app.route("/api/log")
 def api_log():
-    lines = read_log(150)
-    return jsonify({"lines": lines})
+    return jsonify({"lines": read_log(150)})
 
 
 @app.route("/")
 def index():
     html_path = Path(__file__).parent / "dashboard.html"
-    return Response(html_path.read_text(), mimetype="text/html")
+    if html_path.exists():
+        return Response(html_path.read_text(), mimetype="text/html")
+    return Response("<h1>Dashboard HTML not found</h1>", mimetype="text/html")
+
+
+def _serve():
+    try:
+        from waitress import serve as waitress_serve
+        print(f"📊  Dashboard on http://0.0.0.0:{PORT} (waitress)")
+        waitress_serve(app, host="0.0.0.0", port=PORT, threads=4)
+    except ImportError:
+        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
 
 def start_dashboard():
-    """Start Flask in a daemon thread (called from bot.py)."""
-    t = threading.Thread(
-        target=lambda: _serve(),
-        daemon=True,
-    )
+    t = threading.Thread(target=_serve, daemon=True)
     t.start()
     return t
 
 
 if __name__ == "__main__":
-    print(f"Starting dashboard on port {PORT}...")
-    app.run(host="0.0.0.0", port=PORT, debug=False)
-
-
-def _serve():
-    """Use waitress (production WSGI) instead of Flask dev server."""
-    try:
-        from waitress import serve as waitress_serve
-        print(f"Dashboard serving on http://0.0.0.0:{PORT} (waitress)")
-        waitress_serve(app, host="0.0.0.0", port=PORT, threads=4)
-    except ImportError:
-        # Fallback to Flask dev server if waitress not installed
-        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+    _serve()
