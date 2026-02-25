@@ -105,17 +105,29 @@ def determine_current_window() -> str:
     else:
         return "sleep_until_morning"
 
-def sleep_with_countdown(seconds: float, label: str):
+def sleep_with_countdown(seconds: float, label: str, trigger_flag: Path = None):
+    """Duerme hasta el próximo evento, pero se despierta si llega un trigger manual."""
     log.info("💤  Sleeping %s until %s...", format_duration(seconds), label)
-    interval = 1800
-    elapsed  = 0.0
+    check_interval = 15   # revisar trigger cada 15 segundos
+    log_interval   = 1800 # loguear countdown cada 30 min
+    elapsed        = 0.0
+    last_log       = 0.0
+
     while elapsed < seconds:
-        chunk    = min(interval, seconds - elapsed)
+        # Detectar trigger manual — despertar inmediatamente
+        if trigger_flag and trigger_flag.exists():
+            log.info("⏰  Trigger manual detectado — saliendo del sleep")
+            return
+
+        chunk    = min(check_interval, seconds - elapsed)
         time.sleep(chunk)
         elapsed += chunk
+
         remaining = seconds - elapsed
-        if remaining > 60:
+        if elapsed - last_log >= log_interval and remaining > 60:
             log.info("⏳  %s remaining until %s", format_duration(remaining), label)
+            last_log = elapsed
+
     log.info("⏰  Waking up for %s", label)
 
 
@@ -377,24 +389,36 @@ def main():
 
     # ── Scheduler loop ────────────────────────────────────────────────────
     log.info("🤖  Entering scheduler loop. (Ctrl+C to stop)")
+    TRIGGER_FLAG = DATA_DIR / ".trigger_morning"
 
     while True:
+        # ── Trigger manual desde el dashboard ─────────────────────────────
+        if TRIGGER_FLAG.exists():
+            try:
+                TRIGGER_FLAG.unlink()
+            except Exception:
+                pass
+            log.info("🖱️   TRIGGER MANUAL — búsqueda de apuestas iniciada desde el dashboard")
+            run_morning(portfolio, analyzer, poly, label="MANUAL TRIGGER")
+            # Después del trigger volvemos al loop normal sin dormir
+            continue
+
         window = determine_current_window()
         log.info("📍  Window: %s  (%s ET)", window, now_et().strftime("%H:%M:%S"))
 
         if window == "morning":
             run_morning(portfolio, analyzer, poly)
-            sleep_with_countdown(seconds_until(EVENING_HOUR_START), "evening session")
+            sleep_with_countdown(seconds_until(EVENING_HOUR_START), "evening session", TRIGGER_FLAG)
 
         elif window == "evening":
             run_evening(portfolio, analyzer, poly)
-            sleep_with_countdown(seconds_until(MORNING_HOUR_START), "morning session")
+            sleep_with_countdown(seconds_until(MORNING_HOUR_START), "morning session", TRIGGER_FLAG)
 
         elif window == "sleep_until_morning":
-            sleep_with_countdown(seconds_until(MORNING_HOUR_START), "morning session")
+            sleep_with_countdown(seconds_until(MORNING_HOUR_START), "morning session", TRIGGER_FLAG)
 
         elif window == "sleep_until_evening":
-            sleep_with_countdown(seconds_until(EVENING_HOUR_START), "evening session")
+            sleep_with_countdown(seconds_until(EVENING_HOUR_START), "evening session", TRIGGER_FLAG)
 
         else:
             log.warning("Unknown window: %s. Sleeping 60s.", window)
