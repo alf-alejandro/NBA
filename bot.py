@@ -56,7 +56,7 @@ log = logging.getLogger("nba-bot")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 INITIAL_CAPITAL   = 20.00
-MAX_BET_PCT       = 0.33
+MAX_BET_PCT       = 0.15
 MAX_TOTAL_EXPOSED = 0.33
 ET                = ZoneInfo("America/New_York")
 
@@ -144,25 +144,26 @@ def run_morning(portfolio: Portfolio, analyzer: GeminiAnalyzer, poly: Polymarket
         log.warning("No games parsed. Gemini may not have found today's schedule.")
         return 0
 
-    bets_placed = 0
+    # ── Paso 1: evaluar todos los juegos y filtrar BUY ──────────────────────
+    candidates = []   # juegos con señal BUY
     for game in games:
         home = game.get("home", "?")
         away = game.get("away", "?")
         log.info("--- %s vs %s ---", home, away)
 
-        p_poly  = game.get("poly_price",       50)
-        p_vegas = game.get("vegas_prob",        50)
-        n_score = game.get("news_score",         0)
-        v_factor= game.get("home_away_factor",   0)
-        r_pct   = game.get("streak_pct",        50)
+        p_poly   = game.get("poly_price",       50)
+        p_vegas  = game.get("vegas_prob",        50)
+        n_score  = game.get("news_score",         0)
+        v_factor = game.get("home_away_factor",   0)
+        r_pct    = game.get("streak_pct",        50)
 
-        bd      = compute_nea_breakdown(p_poly, p_vegas, n_score, v_factor, r_pct)
+        bd        = compute_nea_breakdown(p_poly, p_vegas, n_score, v_factor, r_pct)
         nea_score = bd["nea"]
-        signal  = interpret_nea(nea_score)
+        signal    = interpret_nea(nea_score)
 
-        log.info("  📊  Datos crudos   → Poly=%d¢  Vegas=%.0f%%  News=%+d  Local=%+d  Racha=%.0f%%",
+        log.info("  📊  Datos crudos → Poly=%d¢  Vegas=%.0f%%  News=%+d  Local=%+d  Racha=%.0f%%",
                  p_poly, p_vegas, n_score, v_factor, r_pct)
-        log.info("  🧮  Prob real      → Vegas:%.1f + News:%.1f + Local:%.1f + Racha:%.1f = %.1f",
+        log.info("  🧮  Prob real    → Vegas:%.1f + News:%.1f + Local:%.1f + Racha:%.1f = %.1f",
                  bd["vegas_contrib"], bd["news_contrib"], bd["home_contrib"], bd["streak_contrib"], bd["real_prob"])
         log.info("  🎯  NEA = %d - %.1f = %+.2f  →  %s [%s]",
                  p_poly, bd["real_prob"], nea_score, signal["action"], signal["confidence"])
@@ -171,40 +172,83 @@ def run_morning(portfolio: Portfolio, analyzer: GeminiAnalyzer, poly: Polymarket
 
         if signal["action"] != "BUY":
             log.info("  ⏭   Sin ventaja (NEA=%+.2f, umbral BUY < -3) — descartado", nea_score)
-            continue
+        else:
+            candidates.append({**game, "nea_score": nea_score, "signal": signal, "home": home, "away": away})
+            log.info("  ✅  Candidato BUY — se calculará el monto después")
 
-        available  = portfolio.available_capital(MAX_TOTAL_EXPOSED)
-        bet_amount = round(min(portfolio.capital * MAX_BET_PCT, available), 2)
+    if not candidates:
+        log.info("No hay candidatos BUY hoy.")
+        log.info("Session done. 0 bets placed.")
+        portfolio.save()
+        portfolio.print_summary()
+        return 0
 
-        if bet_amount < 0.10:
-            log.warning("  ⚠   Bet size too small ($%.2f). Skipping.", bet_amount)
+    # ── Paso 2: sizing proporcional al NEA, con tope del 15% por apuesta ─────
+    #
+    #  - Presupuesto diario máximo: 33% del capital actual
+    #  - Tope por equipo: 15% del capital actual
+    #  - Distribución: proporcional a |NEA| de cada candidato
+    #    (mayor ventaja → más dinero, pero nunca más del 15%)
+    #
+    capital        = portfolio.capital
+    daily_budget   = round(capital * MAX_TOTAL_EXPOSED, 4)   # 33%
+    single_cap     = round(capital * MAX_BET_PCT,       4)   # 15%
+    available      = portfolio.available_capital(MAX_TOTAL_EXPOSED)
+    budget         = min(daily_budget, available)            # respeta lo ya expuesto
+
+    log.info("=" * 60)
+    log.info("  💰  Capital: $%.2f | Presupuesto diario: $%.2f (33%%) | Tope/apuesta: $%.2f (15%%)",
+             capital, budget, single_cap)
+    log.info("  📋  %d candidato(s) BUY encontrado(s) — calculando sizing...", len(candidates))
+
+    # Pesos proporcionales a la magnitud del NEA (más negativo = más ventaja)
+    nea_magnitudes = [abs(c["nea_score"]) for c in candidates]
+    total_magnitude = sum(nea_magnitudes)
+
+    sized_bets = []
+    for c, mag in zip(candidates, nea_magnitudes):
+        weight     = mag / total_magnitude          # fracción proporcional
+        raw_amount = round(budget * weight, 4)      # parte del presupuesto
+        amount     = round(min(raw_amount, single_cap), 2)  # tope 15%
+        amount     = max(amount, 0.10)              # mínimo operativo
+        sized_bets.append({**c, "amount_usd": amount, "weight_pct": round(weight * 100, 1)})
+        log.info("  📐  %s → NEA=%+.2f | peso=%.1f%% | monto=$%.2f",
+                 c.get("bet_on", c["home"]), c["nea_score"], weight * 100, amount)
+
+    # ── Paso 3: registrar y ejecutar las apuestas ─────────────────────────────
+    bets_placed = 0
+    for sb in sized_bets:
+        if sb["amount_usd"] < 0.10:
+            log.warning("  ⚠   Monto muy pequeño ($%.2f) — omitido", sb["amount_usd"])
             continue
 
         bet = {
-            "date"       : str(date.today()),
-            "market_id"  : game.get("market_id", "SIMULATED"),
-            "home"       : home,
-            "away"       : away,
-            "bet_on"     : game.get("bet_on", home),
-            "poly_price" : game.get("poly_price", 50),
-            "nea_score"  : round(nea_score, 2),
-            "amount_usd" : bet_amount,
-            "status"     : "OPEN",
-            "result"     : None,
-            "pnl"        : None,
-            "news_summary": game.get("news_summary", ""),
-            "rationale"  : game.get("rationale", ""),
+            "date"        : str(date.today()),
+            "market_id"   : sb.get("market_id", "SIMULATED"),
+            "home"        : sb["home"],
+            "away"        : sb["away"],
+            "bet_on"      : sb.get("bet_on", sb["home"]),
+            "poly_price"  : sb.get("poly_price", 50),
+            "nea_score"   : round(sb["nea_score"], 2),
+            "amount_usd"  : sb["amount_usd"],
+            "weight_pct"  : sb["weight_pct"],
+            "status"      : "OPEN",
+            "result"      : None,
+            "pnl"         : None,
+            "news_summary": sb.get("news_summary", ""),
+            "rationale"   : sb.get("rationale",    ""),
         }
         portfolio.place_bet(bet)
         poly.place_order(
             market_id  = bet["market_id"],
             side       = "buy",
-            amount_usd = bet_amount,
+            amount_usd = sb["amount_usd"],
             price      = bet["poly_price"] / 100.0,
         )
         bets_placed += 1
-        log.info("  ✅  BET: $%.2f on %s @ %d¢  (NEA=%+.1f, %s)",
-                 bet_amount, bet["bet_on"], bet["poly_price"], nea_score, signal["confidence"])
+        log.info("  ✅  BET: $%.2f (%.1f%% del presupuesto) en %s @ %d¢  (NEA=%+.1f, %s)",
+                 sb["amount_usd"], sb["weight_pct"], bet["bet_on"],
+                 bet["poly_price"], sb["nea_score"], sb["signal"]["confidence"])
 
     log.info("Session done. %d bets placed.", bets_placed)
     portfolio.save()
