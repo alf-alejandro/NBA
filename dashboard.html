@@ -1,67 +1,129 @@
-<!DOCTYPE html>
-<html lang="en">
+"""
+Dashboard web para NBA Edge Alpha Bot v3.0
+Sirve el frontend y expone endpoints API.
+"""
+
+import os
+import json
+import threading
+from datetime import datetime
+from flask import Flask, jsonify, send_file, abort
+import main as bot
+
+app = Flask(__name__)
+PORT = int(os.environ.get("PORT", "8080"))
+
+# ── Estado del scan en curso ───────────────────────────────────────────────────
+_scan_running = False
+_scan_lock    = threading.Lock()
+
+
+def _run_scan_background():
+    global _scan_running
+    try:
+        bot.log.info("🖐 Ejecutando scan manual inmediato...")
+        bot.ciclo_scan_y_posiciones()
+    finally:
+        with _scan_lock:
+            _scan_running = False
+
+
+# ── API Endpoints ──────────────────────────────────────────────────────────────
+
+@app.route("/api/data")
+def api_data():
+    data = bot.get_dashboard_data()
+    data["scan_running"] = _scan_running
+    return jsonify(data)
+
+
+@app.route("/api/scan", methods=["POST"])
+def api_scan():
+    """Lanza el scan inmediatamente en un hilo background."""
+    global _scan_running
+    with _scan_lock:
+        if _scan_running:
+            return jsonify({"ok": False, "message": "Ya hay un scan en curso"}), 429
+        _scan_running = True
+
+    t = threading.Thread(target=_run_scan_background, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "message": "Scan iniciado"})
+
+
+@app.route("/api/positions")
+def api_positions():
+    return jsonify({"positions": bot.load_positions()})
+
+
+@app.route("/api/scan_log")
+def api_scan_log():
+    return jsonify({"log": bot.load_scan_log()})
+
+
+# ── Frontend ───────────────────────────────────────────────────────────────────
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NBA Edge Alpha — Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Syne+Mono&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NBA EDGE ALPHA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:        #080b10;
-    --bg2:       #0d1117;
-    --bg3:       #111820;
-    --border:    #1e2d3d;
-    --accent:    #00e5ff;
-    --accent2:   #7fff6e;
-    --warn:      #ffb347;
-    --danger:    #ff4d6d;
-    --text:      #c9d8e8;
-    --text-dim:  #4a6070;
-    --text-mid:  #7a9ab0;
-    --mono:      'Syne Mono', monospace;
-    --sans:      'DM Sans', sans-serif;
-    --glow:      0 0 20px rgba(0,229,255,0.15);
-    --glow2:     0 0 20px rgba(127,255,110,0.12);
+    --bg:      #050a0f;
+    --surface: #0b1520;
+    --border:  #1a2f45;
+    --accent:  #00e5ff;
+    --green:   #00ff88;
+    --red:     #ff3b5c;
+    --gold:    #ffd700;
+    --dim:     #4a6b80;
+    --text:    #c8dde8;
+    --mono:    'Share Tech Mono', monospace;
+    --sans:    'Barlow Condensed', sans-serif;
   }
 
-  * { margin:0; padding:0; box-sizing:border-box; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    font-size: 13px;
-    min-height: 100vh;
+    font-size: 16px;
     overflow-x: hidden;
+    min-height: 100vh;
   }
 
-  /* Scanline overlay */
+  /* Background grid */
   body::before {
     content: '';
     position: fixed;
     inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0,0,0,0.03) 2px,
-      rgba(0,0,0,0.03) 4px
-    );
+    background-image:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
     pointer-events: none;
-    z-index: 1000;
+    z-index: 0;
   }
+
+  #app { position: relative; z-index: 1; }
 
   /* ── Header ── */
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 28px;
+    padding: 18px 32px;
     border-bottom: 1px solid var(--border);
-    background: var(--bg2);
+    background: rgba(11,21,32,0.95);
     position: sticky;
     top: 0;
     z-index: 100;
+    backdrop-filter: blur(10px);
   }
 
   .logo {
@@ -71,28 +133,34 @@
   }
 
   .logo-icon {
-    width: 36px;
-    height: 36px;
-    background: linear-gradient(135deg, var(--accent), #0077ff);
+    width: 40px;
+    height: 40px;
+    border: 2px solid var(--accent);
     border-radius: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 18px;
-    box-shadow: var(--glow);
+    font-size: 20px;
+    animation: pulse-border 3s infinite;
   }
 
-  .logo-text {
-    font-family: var(--mono);
-    font-size: 14px;
-    letter-spacing: 0.08em;
+  @keyframes pulse-border {
+    0%, 100% { border-color: var(--accent); box-shadow: 0 0 8px rgba(0,229,255,0.3); }
+    50%       { border-color: var(--green); box-shadow: 0 0 16px rgba(0,255,136,0.4); }
+  }
+
+  .logo-text { line-height: 1; }
+  .logo-text .title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 4px;
     color: var(--accent);
+    text-transform: uppercase;
   }
-
-  .logo-sub {
-    font-size: 10px;
-    color: var(--text-dim);
-    letter-spacing: 0.15em;
+  .logo-text .sub {
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--dim);
     text-transform: uppercase;
   }
 
@@ -102,1016 +170,754 @@
     gap: 20px;
   }
 
-  #bot-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  .timestamp {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--dim);
+  }
+
+  .last-scan {
     font-family: var(--mono);
     font-size: 11px;
-    letter-spacing: 0.1em;
+    color: var(--dim);
   }
 
-  .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--text-dim);
-  }
-  .status-dot.sleeping { background: var(--warn); animation: pulse-warn 2s infinite; }
-  .status-dot.morning  { background: var(--accent); animation: pulse-cyan 1s infinite; }
-  .status-dot.evening  { background: var(--accent2); animation: pulse-green 1s infinite; }
-  .status-dot.starting { background: var(--danger); animation: pulse-warn 0.5s infinite; }
-  .status-dot.healthcheck { background: #b47fff; animation: pulse-warn 0.8s infinite; }
-
-  @keyframes pulse-warn  { 0%,100%{opacity:1} 50%{opacity:.3} }
-  @keyframes pulse-cyan  { 0%,100%{opacity:1} 50%{opacity:.4} }
-  @keyframes pulse-green { 0%,100%{opacity:1} 50%{opacity:.4} }
-
-  #last-update {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--text-dim);
+  #scan-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 2px;
+    padding: 8px 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
   }
 
-  /* ── Layout ── */
-  .main {
-    padding: 20px 28px;
-    display: grid;
-    gap: 16px;
-    max-width: 1600px;
+  #scan-btn:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  #scan-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ── Main layout ── */
+  main {
+    padding: 24px 32px;
+    max-width: 1400px;
     margin: 0 auto;
   }
 
-  /* ── KPI row ── */
-  .kpi-row {
+  /* ── Stats row ── */
+  .stats-row {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stat-card::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+  }
+
+  .stat-card.green::after { background: var(--green); }
+  .stat-card.red::after   { background: var(--red); }
+  .stat-card.gold::after  { background: var(--gold); }
+
+  .stat-label {
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 10px;
+  }
+
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 32px;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-card.green .stat-value { color: var(--green); }
+  .stat-card.red   .stat-value { color: var(--red); }
+  .stat-card.gold  .stat-value { color: var(--gold); }
+
+  /* ── Section headers ── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    margin-top: 8px;
+  }
+
+  .section-title {
+    font-size: 13px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-weight: 600;
+  }
+
+  .section-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .section-count {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--dim);
+  }
+
+  /* ── Two-column layout ── */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 28px;
+  }
+
+  /* ── Position cards ── */
+  .positions-grid {
+    display: flex;
+    flex-direction: column;
     gap: 12px;
   }
 
-  .kpi {
-    background: var(--bg2);
+  .pos-card {
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px 18px;
+    padding: 16px 20px;
+    transition: border-color 0.2s;
     position: relative;
     overflow: hidden;
-    transition: border-color .2s;
-  }
-  .kpi:hover { border-color: var(--accent); }
-  .kpi::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, var(--accent), transparent);
-    opacity: 0;
-    transition: opacity .2s;
-  }
-  .kpi:hover::after { opacity: 1; }
-
-  .kpi-label {
-    font-size: 9px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    margin-bottom: 8px;
   }
 
-  .kpi-value {
-    font-family: var(--mono);
-    font-size: 26px;
-    font-weight: 400;
-    line-height: 1;
-    color: var(--text);
-  }
+  .pos-card.open    { border-left: 3px solid var(--accent); }
+  .pos-card.closed-tp { border-left: 3px solid var(--green); }
+  .pos-card.closed-sl { border-left: 3px solid var(--red); }
 
-  .kpi-value.green  { color: var(--accent2); text-shadow: var(--glow2); }
-  .kpi-value.red    { color: var(--danger); }
-  .kpi-value.cyan   { color: var(--accent); text-shadow: var(--glow); }
-  .kpi-value.yellow { color: var(--warn); }
-
-  .kpi-sub {
-    font-size: 10px;
-    color: var(--text-mid);
-    margin-top: 6px;
-  }
-
-  /* ── 2-col section ── */
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1.6fr;
-    gap: 16px;
-  }
-
-  .three-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 16px;
-  }
-
-  /* ── Panel ── */
-  .panel {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-  }
-
-  .panel-header {
+  .pos-header {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    padding: 12px 18px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg3);
+    align-items: flex-start;
+    margin-bottom: 10px;
   }
 
-  .panel-title {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.18em;
+  .pos-match {
+    font-size: 11px;
+    color: var(--dim);
+    letter-spacing: 1px;
     text-transform: uppercase;
-    color: var(--accent);
   }
 
-  .panel-badge {
+  .pos-team {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .pos-badge {
+    font-size: 10px;
+    letter-spacing: 2px;
+    padding: 3px 8px;
+    border: 1px solid;
+    font-weight: 600;
+  }
+
+  .pos-badge.open   { color: var(--accent); border-color: var(--accent); }
+  .pos-badge.tp     { color: var(--green);  border-color: var(--green); }
+  .pos-badge.sl     { color: var(--red);    border-color: var(--red); }
+
+  .pos-prices {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 10px;
+  }
+
+  .pos-price-item { line-height: 1.3; }
+
+  .pos-price-label {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+
+  .pos-price-val {
     font-family: var(--mono);
-    font-size: 9px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: rgba(0,229,255,0.08);
-    color: var(--accent);
-    border: 1px solid rgba(0,229,255,0.2);
+    font-size: 16px;
   }
 
-  .panel-body {
-    padding: 16px 18px;
+  .pos-price-val.entry  { color: var(--text); }
+  .pos-price-val.current { color: var(--accent); }
+  .pos-price-val.tp-val  { color: var(--green); }
+  .pos-price-val.sl-val  { color: var(--red); }
+
+  .pos-pnl {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: bold;
+  }
+  .pos-pnl.pos { color: var(--green); }
+  .pos-pnl.neg { color: var(--red); }
+  .pos-pnl.neu { color: var(--dim); }
+
+  /* Price bar */
+  .price-bar-wrapper {
+    margin-top: 10px;
   }
 
-  /* ── Chart ── */
-  #pnl-chart-wrap {
-    height: 160px;
+  .price-bar-track {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
     position: relative;
-  }
-  #pnl-canvas {
-    width: 100%;
-    height: 100%;
+    margin-bottom: 4px;
   }
 
-  /* ── Bet table ── */
-  .bet-table {
+  .price-bar-sl  {
+    position: absolute;
+    width: 2px;
+    height: 10px;
+    top: -3px;
+    background: var(--red);
+    border-radius: 1px;
+  }
+
+  .price-bar-tp  {
+    position: absolute;
+    width: 2px;
+    height: 10px;
+    top: -3px;
+    background: var(--green);
+    border-radius: 1px;
+  }
+
+  .price-bar-entry {
+    position: absolute;
+    width: 2px;
+    height: 10px;
+    top: -3px;
+    background: var(--dim);
+    border-radius: 1px;
+  }
+
+  .price-bar-current {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    top: -2px;
+    background: var(--accent);
+    border-radius: 50%;
+    transform: translateX(-50%);
+    transition: left 0.5s;
+  }
+
+  /* ── Opportunities table ── */
+  .ops-table {
     width: 100%;
     border-collapse: collapse;
   }
 
-  .bet-table th {
-    font-size: 9px;
-    letter-spacing: 0.15em;
+  .ops-table th {
+    font-size: 10px;
+    letter-spacing: 3px;
     text-transform: uppercase;
-    color: var(--text-dim);
-    padding: 8px 10px;
+    color: var(--dim);
     text-align: left;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
+    font-weight: 600;
   }
 
-  .bet-table td {
-    padding: 10px 10px;
-    border-bottom: 1px solid rgba(30,45,61,0.5);
-    font-family: var(--mono);
-    font-size: 11px;
+  .ops-table td {
+    padding: 10px 12px;
+    font-size: 14px;
+    border-bottom: 1px solid rgba(26,47,69,0.5);
     vertical-align: middle;
   }
 
-  .bet-table tr:last-child td { border-bottom: none; }
-  .bet-table tbody tr { transition: background .15s; }
-  .bet-table tbody tr:hover { background: rgba(0,229,255,0.03); }
-
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 9px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    font-family: var(--mono);
+  .ops-table tr:hover td {
+    background: rgba(0,229,255,0.03);
   }
 
-  .badge-open    { background: rgba(255,179,71,0.12); color: var(--warn);    border: 1px solid rgba(255,179,71,0.25); }
-  .badge-win     { background: rgba(127,255,110,0.1); color: var(--accent2); border: 1px solid rgba(127,255,110,0.2); }
-  .badge-loss    { background: rgba(255,77,109,0.1);  color: var(--danger);  border: 1px solid rgba(255,77,109,0.2); }
-  .badge-buy     { background: rgba(0,229,255,0.1);   color: var(--accent);  border: 1px solid rgba(0,229,255,0.2); }
-  .badge-neutral { background: rgba(120,120,120,0.1); color: #888;           border: 1px solid #333; }
+  .nea-buy  { color: var(--green);  font-family: var(--mono); font-weight: bold; }
+  .nea-avoid { color: var(--red);   font-family: var(--mono); }
 
-  .nea-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .nea-track {
-    width: 60px;
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  .nea-fill {
-    height: 100%;
-    border-radius: 2px;
-    background: var(--accent2);
-    transition: width .4s;
-  }
-  .nea-fill.red { background: var(--danger); }
+  .action-buy  { color: var(--green);  font-size: 11px; letter-spacing: 2px; font-weight: 600; }
+  .action-avoid { color: var(--red);   font-size: 11px; letter-spacing: 2px; }
 
-  /* ── Log terminal ── */
-  #log-terminal {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    line-height: 1.7;
-    color: var(--text-mid);
-    height: 340px;
-    overflow-y: auto;
+  .price-mono { font-family: var(--mono); font-size: 13px; }
+
+  /* ── Config panel ── */
+  .config-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+
+  .config-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
     padding: 14px 16px;
-    scroll-behavior: smooth;
-  }
-  #log-terminal::-webkit-scrollbar { width: 4px; }
-  #log-terminal::-webkit-scrollbar-track { background: transparent; }
-  #log-terminal::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .log-line { display: block; }
-  .log-line.info    { color: var(--text-mid); }
-  .log-line.warning { color: var(--warn); }
-  .log-line.error   { color: var(--danger); }
-  .log-line.success { color: var(--accent2); }
-  .log-line.bet     { color: var(--accent); }
-  .log-line.sleep   { color: #5a6a7a; font-style: italic; }
-  .log-line.session { color: var(--accent); font-weight: bold; }
-
-  /* Mini win/loss gauge */
-  .gauge-wrap {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 16px 18px;
   }
 
-  .gauge-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .gauge-label {
+  .config-label {
     font-size: 10px;
-    letter-spacing: 0.1em;
-    color: var(--text-mid);
-    width: 50px;
-    flex-shrink: 0;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 6px;
   }
 
-  .gauge-track {
-    flex: 1;
-    height: 6px;
-    background: var(--border);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .gauge-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
-  }
-
-  .gauge-fill.green { background: linear-gradient(90deg, var(--accent2), #3fff80); }
-  .gauge-fill.red   { background: linear-gradient(90deg, var(--danger), #ff8fa3); }
-  .gauge-fill.cyan  { background: linear-gradient(90deg, var(--accent), #00aaff); }
-
-  .gauge-val {
-    font-family: var(--mono);
-    font-size: 11px;
-    width: 40px;
-    text-align: right;
-    color: var(--text);
-  }
-
-  /* Capital ring */
-  .ring-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    position: relative;
-  }
-
-  .ring-svg { transform: rotate(-90deg); }
-  .ring-center {
-    position: absolute;
-    text-align: center;
-  }
-  .ring-center-val {
+  .config-value {
     font-family: var(--mono);
     font-size: 20px;
     color: var(--accent);
-    display: block;
-  }
-  .ring-center-label {
-    font-size: 9px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    display: block;
-    margin-top: 2px;
   }
 
-  /* ── Today card ── */
-  .today-bet-card {
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px 14px;
-    margin-bottom: 10px;
-    background: var(--bg3);
-    transition: border-color .2s;
-  }
-  .today-bet-card:hover { border-color: var(--accent); }
-  .today-bet-card:last-child { margin-bottom: 0; }
-
-  .tbc-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 8px;
+  /* ── Scrollable containers ── */
+  .scroll-box {
+    max-height: 460px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
   }
 
-  .tbc-teams {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text);
-  }
-
-  .tbc-amount {
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--warn);
-  }
-
-  .tbc-meta {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-
-  .tbc-item {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .tbc-item-label {
-    font-size: 8px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-  .tbc-item-val {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text);
-  }
-
-  .tbc-rationale {
-    margin-top: 8px;
-    font-size: 11px;
-    color: var(--text-mid);
-    line-height: 1.5;
-    font-style: italic;
-    border-left: 2px solid var(--border);
-    padding-left: 10px;
-  }
-
-  /* ── Empty state ── */
   .empty-state {
     text-align: center;
     padding: 40px 20px;
-    color: var(--text-dim);
-    font-size: 11px;
-    letter-spacing: 0.1em;
+    color: var(--dim);
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  /* ── Notifications ── */
+  #notif {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 12px 20px;
+    font-size: 13px;
+    letter-spacing: 1px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s;
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  #notif.show {
+    opacity: 1;
+    transform: translateY(0);
   }
 
   /* ── Responsive ── */
-  @media (max-width: 1200px) {
-    .kpi-row { grid-template-columns: repeat(3, 1fr); }
-    .two-col  { grid-template-columns: 1fr; }
-    .three-col { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 1100px) {
+    .stats-row   { grid-template-columns: repeat(3, 1fr); }
+    .two-col     { grid-template-columns: 1fr; }
+    .config-grid { grid-template-columns: repeat(2, 1fr); }
   }
+
   @media (max-width: 700px) {
-    .kpi-row   { grid-template-columns: repeat(2, 1fr); }
-    .three-col { grid-template-columns: 1fr; }
-    header     { padding: 12px 16px; }
-    .main      { padding: 12px 16px; }
+    header   { padding: 14px 16px; }
+    main     { padding: 16px; }
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .pos-prices { flex-wrap: wrap; gap: 12px; }
   }
-
-  /* Entrance animation */
-  .fade-in {
-    animation: fadeIn 0.4s ease both;
-  }
-  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
-
-  .stagger-1 { animation-delay: 0.05s; }
-  .stagger-2 { animation-delay: 0.10s; }
-  .stagger-3 { animation-delay: 0.15s; }
-  .stagger-4 { animation-delay: 0.20s; }
 </style>
 </head>
 <body>
+<div id="app">
 
-<header>
-  <div class="logo">
-    <div class="logo-icon">🏀</div>
-    <div>
-      <div class="logo-text">NBA EDGE ALPHA</div>
-      <div class="logo-sub">Polymarket Simulation Dashboard</div>
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🏀</div>
+      <div class="logo-text">
+        <div class="title">NBA Edge Alpha</div>
+        <div class="sub">Polymarket · Price Inefficiency Bot</div>
+      </div>
     </div>
-  </div>
-  <div class="header-right">
-    <div id="bot-status">
-      <div class="status-dot" id="status-dot"></div>
-      <span id="status-label">CONNECTING...</span>
+    <div class="header-right">
+      <div>
+        <div class="timestamp" id="clock">--:--:-- ET</div>
+        <div class="last-scan" id="last-scan-label">Last scan: --</div>
+      </div>
+      <button id="scan-btn" onclick="triggerScan()">⚡ SCAN NOW</button>
     </div>
-    <div id="last-update">--</div>
-    <button id="trigger-btn" onclick="triggerMorning()" style="
-      background: rgba(0,229,255,0.1);
-      border: 1px solid rgba(0,229,255,0.4);
-      color: var(--accent);
-      font-family: var(--mono);
-      font-size: 11px;
-      letter-spacing: 0.12em;
-      padding: 7px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all .2s;
-      text-transform: uppercase;
-    " onmouseover="this.style.background='rgba(0,229,255,0.2)'"
-       onmouseout="this.style.background='rgba(0,229,255,0.1)'">
-      🔍 Buscar Apuestas
-    </button>
-  </div>
-</header>
+  </header>
 
-<div class="main">
+  <main>
 
-  <!-- KPI Row -->
-  <div class="kpi-row fade-in">
-    <div class="kpi">
-      <div class="kpi-label">Capital</div>
-      <div class="kpi-value cyan" id="kpi-capital">$--</div>
-      <div class="kpi-sub" id="kpi-capital-sub">started at $20.00</div>
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Capital Actual</div>
+        <div class="stat-value" id="stat-capital" style="font-size:24px">$100.00</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">PnL Total</div>
+        <div class="stat-value" id="stat-pnl" style="font-size:24px">$0.00</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Posiciones Abiertas</div>
+        <div class="stat-value" id="stat-open">0</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Take Profits</div>
+        <div class="stat-value" id="stat-tp">0</div>
+      </div>
+      <div class="stat-card red">
+        <div class="stat-label">Stop Losses</div>
+        <div class="stat-value" id="stat-sl">0</div>
+      </div>
+      <div class="stat-card gold">
+        <div class="stat-label">Win Rate</div>
+        <div class="stat-value" id="stat-wr">0%</div>
+      </div>
     </div>
-    <div class="kpi">
-      <div class="kpi-label">Total PnL</div>
-      <div class="kpi-value" id="kpi-pnl">$--</div>
-      <div class="kpi-sub" id="kpi-roi">ROI: --%</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Win Rate</div>
-      <div class="kpi-value" id="kpi-winrate">--%</div>
-      <div class="kpi-sub" id="kpi-wl">-- wins / -- losses</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Total Bets</div>
-      <div class="kpi-value cyan" id="kpi-totalbets">--</div>
-      <div class="kpi-sub" id="kpi-openbets">-- open today</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Exposure</div>
-      <div class="kpi-value yellow" id="kpi-exposure">--%</div>
-      <div class="kpi-sub">max 33% allowed</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Bot Status</div>
-      <div class="kpi-value" id="kpi-status-val" style="font-size:18px">--</div>
-      <div class="kpi-sub" id="kpi-time">--</div>
-    </div>
-  </div>
 
-  <!-- PnL Chart + Stats -->
-  <div class="two-col fade-in stagger-1">
+    <!-- Config -->
+    <div class="section-header">
+      <span class="section-title">Configuración Activa</span>
+      <div class="section-line"></div>
+    </div>
+    <div class="config-grid" style="margin-bottom:28px">
+      <div class="config-item">
+        <div class="config-label">NEA Umbral (pts)</div>
+        <div class="config-value" id="cfg-nea">--</div>
+      </div>
+      <div class="config-item">
+        <div class="config-label">Valor Real Mínimo</div>
+        <div class="config-value" id="cfg-vrmin">--</div>
+      </div>
+      <div class="config-item">
+        <div class="config-label">Take Profit (fijo)</div>
+        <div class="config-value" id="cfg-tp">--</div>
+      </div>
+      <div class="config-item">
+        <div class="config-label">Monto / Trade</div>
+        <div class="config-value" id="cfg-monto">--</div>
+      </div>
+    </div>
 
-    <!-- Left: ring + gauges -->
-    <div style="display:flex;flex-direction:column;gap:16px;">
+    <!-- Posiciones abiertas + Oportunidades -->
+    <div class="two-col">
 
-      <div class="panel">
-        <div class="panel-header">
-          <span class="panel-title">Capital Deployment</span>
+      <!-- Posiciones abiertas -->
+      <div>
+        <div class="section-header">
+          <span class="section-title">Posiciones Abiertas</span>
+          <div class="section-line"></div>
+          <span class="section-count" id="open-count">0</span>
         </div>
-        <div class="ring-wrap">
-          <svg class="ring-svg" width="130" height="130" viewBox="0 0 130 130">
-            <circle cx="65" cy="65" r="55" fill="none" stroke="#1e2d3d" stroke-width="10"/>
-            <circle cx="65" cy="65" r="55" fill="none" stroke="#00e5ff" stroke-width="10"
-              stroke-dasharray="345.4" stroke-dashoffset="345.4"
-              stroke-linecap="round" id="ring-circle"
-              style="transition: stroke-dashoffset 1s cubic-bezier(0.4,0,0.2,1)"/>
-          </svg>
-          <div class="ring-center">
-            <span class="ring-center-val" id="ring-val">0%</span>
-            <span class="ring-center-label">exposed</span>
-          </div>
-        </div>
-        <div class="gauge-wrap">
-          <div class="gauge-row">
-            <span class="gauge-label">Wins</span>
-            <div class="gauge-track"><div class="gauge-fill green" id="g-wins" style="width:0%"></div></div>
-            <span class="gauge-val green" id="gv-wins">0</span>
-          </div>
-          <div class="gauge-row">
-            <span class="gauge-label">Losses</span>
-            <div class="gauge-track"><div class="gauge-fill red" id="g-losses" style="width:0%"></div></div>
-            <span class="gauge-val" style="color:var(--danger)" id="gv-losses">0</span>
-          </div>
-          <div class="gauge-row">
-            <span class="gauge-label">Open</span>
-            <div class="gauge-track"><div class="gauge-fill cyan" id="g-open" style="width:0%"></div></div>
-            <span class="gauge-val cyan" id="gv-open">0</span>
+        <div class="scroll-box">
+          <div class="positions-grid" id="open-positions">
+            <div class="empty-state">Sin posiciones abiertas</div>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Right: PnL Chart -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Cumulative PnL</span>
-        <span class="panel-badge" id="chart-badge">$0.00</span>
-      </div>
-      <div class="panel-body" style="padding:16px 12px 8px;">
-        <div id="pnl-chart-wrap">
-          <canvas id="pnl-canvas"></canvas>
+      <!-- Último scan - oportunidades -->
+      <div>
+        <div class="section-header">
+          <span class="section-title">Último Scan — Oportunidades</span>
+          <div class="section-line"></div>
+          <span class="section-count" id="ops-count">0</span>
         </div>
-        <div style="text-align:center;font-size:9px;letter-spacing:0.12em;color:var(--text-dim);margin-top:8px;">
-          DAILY CUMULATIVE PnL (USD)
+        <div class="scroll-box">
+          <table class="ops-table">
+            <thead>
+              <tr>
+                <th>Partido</th>
+                <th>Equipo</th>
+                <th>Precio</th>
+                <th>Valor Real</th>
+                <th>NEA</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody id="ops-tbody">
+              <tr><td colspan="6" class="empty-state">Sin datos del último scan</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- Today's bets + History table -->
-  <div class="two-col fade-in stagger-2">
-
-    <!-- Today's bets -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Today's Bets</span>
-        <span class="panel-badge" id="today-count">0 bets</span>
-      </div>
-      <div class="panel-body" id="todays-bets-container" style="max-height:340px;overflow-y:auto;">
-        <div class="empty-state">No bets placed today yet</div>
+    <!-- Posiciones cerradas -->
+    <div class="section-header">
+      <span class="section-title">Historial Posiciones Cerradas</span>
+      <div class="section-line"></div>
+      <span class="section-count" id="closed-count">0</span>
+    </div>
+    <div class="scroll-box" style="max-height:300px; margin-bottom:40px">
+      <div class="positions-grid" id="closed-positions">
+        <div class="empty-state">Sin posiciones cerradas</div>
       </div>
     </div>
 
-    <!-- All bets history -->
-    <div class="panel">
-      <div class="panel-header">
-        <span class="panel-title">Bet History</span>
-        <span class="panel-badge">last 50</span>
-      </div>
-      <div style="overflow-x:auto;max-height:340px;overflow-y:auto;">
-        <table class="bet-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Match</th>
-              <th>Bet On</th>
-              <th>Price</th>
-              <th>NEA</th>
-              <th>Amount</th>
-              <th>Status</th>
-              <th>PnL</th>
-            </tr>
-          </thead>
-          <tbody id="bet-history-body">
-            <tr><td colspan="8" class="empty-state">Loading...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Log terminal -->
-  <div class="panel fade-in stagger-3">
-    <div class="panel-header">
-      <span class="panel-title">Bot Log — Live</span>
-      <span class="panel-badge" id="log-badge">0 lines</span>
-    </div>
-    <div id="log-terminal"></div>
-  </div>
-
+  </main>
 </div>
 
+<div id="notif"></div>
+
 <script>
-// ── State ──────────────────────────────────────────────────────────────────
-let pnlHistory  = [];
-let canvasCtx   = null;
-let animFrame   = null;
+let data = {};
 
-// ── Init canvas ────────────────────────────────────────────────────────────
-function initCanvas() {
-  const canvas = document.getElementById('pnl-canvas');
-  const wrap   = document.getElementById('pnl-chart-wrap');
-  canvas.width  = wrap.clientWidth  * devicePixelRatio;
-  canvas.height = wrap.clientHeight * devicePixelRatio;
-  canvas.style.width  = wrap.clientWidth  + 'px';
-  canvas.style.height = wrap.clientHeight + 'px';
-  canvasCtx = canvas.getContext('2d');
-  canvasCtx.scale(devicePixelRatio, devicePixelRatio);
+function fmt(v, decimals=4) {
+  return (v*100).toFixed(1) + '¢';
 }
 
-// ── Draw PnL chart ─────────────────────────────────────────────────────────
-function drawChart(history) {
-  if (!canvasCtx) return;
-  const canvas = document.getElementById('pnl-canvas');
-  const W = canvas.width  / devicePixelRatio;
-  const H = canvas.height / devicePixelRatio;
-  canvasCtx.clearRect(0, 0, W, H);
+function fmtTs(iso) {
+  if (!iso) return '--';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('es', {timeZone:'America/New_York', hour12:false, month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit'}) + ' ET';
+  } catch { return iso; }
+}
 
-  if (!history || history.length === 0) {
-    canvasCtx.fillStyle = '#4a6070';
-    canvasCtx.font = '11px Syne Mono, monospace';
-    canvasCtx.textAlign = 'center';
-    canvasCtx.fillText('No data yet', W/2, H/2);
-    return;
-  }
+function renderPosCard(pos) {
+  const statusClass = pos.status === 'OPEN' ? 'open' :
+                      pos.close_reason === 'TAKE_PROFIT' ? 'closed-tp' : 'closed-sl';
 
-  // Add start point at 0
-  const pts = [{date: 'start', pnl: 0}, ...history];
-  const values = pts.map(p => p.pnl);
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
-  const range = maxV - minV || 1;
-  const pad = { t: 16, b: 24, l: 46, r: 12 };
-  const cW = W - pad.l - pad.r;
-  const cH = H - pad.t - pad.b;
+  const badgeClass = pos.status === 'OPEN' ? 'open' :
+                     pos.close_reason === 'TAKE_PROFIT' ? 'tp' : 'sl';
+  const badgeLabel = pos.status === 'OPEN' ? 'OPEN' :
+                     pos.close_reason === 'TAKE_PROFIT' ? '✅ TAKE PROFIT' : '🛑 STOP LOSS';
 
-  const toX = i  => pad.l + (i / (pts.length - 1)) * cW;
-  const toY = v  => pad.t + cH - ((v - minV) / range) * cH;
+  const pnl = pos.pnl_pct || 0;
+  const pnlClass = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'neu';
+  const pnlSign  = pnl > 0 ? '+' : '';
 
-  // Zero line
-  const zeroY = toY(0);
-  canvasCtx.strokeStyle = '#1e2d3d';
-  canvasCtx.lineWidth = 1;
-  canvasCtx.setLineDash([4, 4]);
-  canvasCtx.beginPath();
-  canvasCtx.moveTo(pad.l, zeroY);
-  canvasCtx.lineTo(W - pad.r, zeroY);
-  canvasCtx.stroke();
-  canvasCtx.setLineDash([]);
+  // Price bar (SL=0%, Entry=middle, TP=100%)
+  const lo = Math.min(pos.stop_loss, pos.precio_entrada, pos.take_profit) * 0.98;
+  const hi = Math.max(pos.stop_loss, pos.precio_entrada, pos.take_profit) * 1.02;
+  const range = hi - lo || 0.01;
 
-  // Gradient fill
-  const lastVal = values[values.length - 1];
-  const isPos   = lastVal >= 0;
-  const grad    = canvasCtx.createLinearGradient(0, pad.t, 0, H - pad.b);
-  if (isPos) {
-    grad.addColorStop(0,   'rgba(127,255,110,0.22)');
-    grad.addColorStop(0.6, 'rgba(127,255,110,0.04)');
-    grad.addColorStop(1,   'rgba(127,255,110,0)');
+  const pct = v => Math.max(0, Math.min(100, (v - lo) / range * 100));
+  const cur = pos.status === 'OPEN' ? pos.precio_actual : (pos.close_reason === 'TAKE_PROFIT' ? pos.take_profit : pos.stop_loss);
+
+  const priceBarHtml = pos.status === 'OPEN' ? `
+    <div class="price-bar-wrapper">
+      <div class="price-bar-track">
+        <div class="price-bar-sl" style="left:${pct(pos.stop_loss)}%"></div>
+        <div class="price-bar-entry" style="left:${pct(pos.precio_entrada)}%"></div>
+        <div class="price-bar-tp" style="left:${pct(pos.take_profit)}%"></div>
+        <div class="price-bar-current" style="left:${pct(cur)}%"></div>
+      </div>
+    </div>` : '';
+
+  return `
+  <div class="pos-card ${statusClass}">
+    <div class="pos-header">
+      <div>
+        <div class="pos-match">${pos.partido} · ${pos.hora_partido}</div>
+        <div class="pos-team">${pos.equipo}</div>
+      </div>
+      <div>
+        <span class="pos-badge ${badgeClass}">${badgeLabel}</span>
+        <div class="pos-pnl ${pnlClass}" style="margin-top:6px;text-align:right">${pnlSign}${pnl.toFixed(2)}%</div>
+      </div>
+    </div>
+    <div class="pos-prices">
+      <div class="pos-price-item">
+        <div class="pos-price-label">Entrada</div>
+        <div class="pos-price-val entry">${fmt(pos.precio_entrada)}</div>
+      </div>
+      <div class="pos-price-item">
+        <div class="pos-price-label">Actual</div>
+        <div class="pos-price-val current">${fmt(pos.precio_actual)}</div>
+      </div>
+      <div class="pos-price-item">
+        <div class="pos-price-label">Take Profit</div>
+        <div class="pos-price-val tp-val">${fmt(pos.take_profit)}</div>
+      </div>
+      <div class="pos-price-item">
+        <div class="pos-price-label">Stop Loss</div>
+        <div class="pos-price-val sl-val">${fmt(pos.stop_loss)}</div>
+      </div>
+      <div class="pos-price-item">
+        <div class="pos-price-label">Valor Real</div>
+        <div class="pos-price-val" style="color:var(--gold)">${fmt(pos.valor_real)}</div>
+      </div>
+    </div>
+    ${priceBarHtml}
+    <div style="margin-top:8px; font-size:11px; color:var(--dim)">
+      Abierta: ${fmtTs(pos.opened_at)}
+      ${pos.closed_at ? ' · Cerrada: ' + fmtTs(pos.closed_at) : ''}
+    </div>
+  </div>`;
+}
+
+function render(d) {
+  data = d;
+
+  // Clock / last scan
+  document.getElementById('last-scan-label').textContent = 'Last scan: ' + fmtTs(d.last_scan);
+
+  // Stats
+  const pnl = d.stats.pnl_total_usd || 0;
+  const pnlEl = document.getElementById('stat-pnl');
+  pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(4);
+  pnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--accent)';
+
+  document.getElementById('stat-capital').textContent = '$' + (d.stats.capital_actual || 100).toFixed(4);
+  document.getElementById('stat-open').textContent    = d.stats.total_open;
+  document.getElementById('stat-tp').textContent      = d.stats.take_profits;
+  document.getElementById('stat-sl').textContent      = d.stats.stop_losses;
+  document.getElementById('stat-wr').textContent      = d.stats.win_rate + '%';
+
+  // Config
+  document.getElementById('cfg-nea').textContent   = d.config.nea_umbral + ' pts';
+  document.getElementById('cfg-vrmin').textContent  = (d.config.valor_real_minimo * 100).toFixed(0) + '¢';
+  document.getElementById('cfg-tp').textContent     = (d.config.take_profit_precio * 100).toFixed(0) + '¢';
+  document.getElementById('cfg-monto').textContent  = '$' + d.config.monto_por_trade_usd + ' (1%)';
+
+  // Open positions
+  const openEl = document.getElementById('open-positions');
+  document.getElementById('open-count').textContent = d.positions_open.length;
+  if (d.positions_open.length === 0) {
+    openEl.innerHTML = '<div class="empty-state">Sin posiciones abiertas</div>';
   } else {
-    grad.addColorStop(0,   'rgba(255,77,109,0.22)');
-    grad.addColorStop(0.6, 'rgba(255,77,109,0.04)');
-    grad.addColorStop(1,   'rgba(255,77,109,0)');
+    openEl.innerHTML = d.positions_open.map(renderPosCard).join('');
   }
 
-  canvasCtx.beginPath();
-  pts.forEach((p, i) => {
-    const x = toX(i), y = toY(p.pnl);
-    i === 0 ? canvasCtx.moveTo(x, y) : canvasCtx.lineTo(x, y);
-  });
-  canvasCtx.lineTo(toX(pts.length - 1), H - pad.b);
-  canvasCtx.lineTo(pad.l, H - pad.b);
-  canvasCtx.closePath();
-  canvasCtx.fillStyle = grad;
-  canvasCtx.fill();
-
-  // Line
-  canvasCtx.beginPath();
-  pts.forEach((p, i) => {
-    const x = toX(i), y = toY(p.pnl);
-    i === 0 ? canvasCtx.moveTo(x, y) : canvasCtx.lineTo(x, y);
-  });
-  canvasCtx.strokeStyle = isPos ? '#7fff6e' : '#ff4d6d';
-  canvasCtx.lineWidth = 2;
-  canvasCtx.lineJoin = 'round';
-  canvasCtx.stroke();
-
-  // Dots
-  pts.forEach((p, i) => {
-    if (i === 0) return;
-    canvasCtx.beginPath();
-    canvasCtx.arc(toX(i), toY(p.pnl), 3, 0, Math.PI * 2);
-    canvasCtx.fillStyle = isPos ? '#7fff6e' : '#ff4d6d';
-    canvasCtx.fill();
-  });
-
-  // Y axis labels
-  canvasCtx.fillStyle = '#4a6070';
-  canvasCtx.font = '9px Syne Mono, monospace';
-  canvasCtx.textAlign = 'right';
-  [minV, 0, maxV].forEach(v => {
-    const y = toY(v);
-    canvasCtx.fillText((v >= 0 ? '+' : '') + v.toFixed(2), pad.l - 6, y + 3);
-  });
-
-  // X axis labels (dates)
-  canvasCtx.textAlign = 'center';
-  pts.forEach((p, i) => {
-    if (i === 0) return;
-    if (pts.length > 8 && i % Math.ceil(pts.length / 6) !== 0 && i !== pts.length - 1) return;
-    const label = p.date === 'start' ? '' : p.date.slice(5);
-    canvasCtx.fillText(label, toX(i), H - pad.b + 14);
-  });
-}
-
-// ── Update KPIs ────────────────────────────────────────────────────────────
-function updateKPIs(d) {
-  const pnl = d.total_pnl;
-  const roi = d.roi_pct;
-
-  setText('kpi-capital',    '$' + d.capital.toFixed(2));
-  setClass('kpi-capital', 'kpi-value cyan');
-
-  const pnlEl = document.getElementById('kpi-pnl');
-  pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
-  pnlEl.className = 'kpi-value ' + (pnl >= 0 ? 'green' : 'red');
-
-  const roiEl = document.getElementById('kpi-roi');
-  roiEl.textContent = 'ROI: ' + (roi >= 0 ? '+' : '') + roi.toFixed(1) + '%';
-  roiEl.style.color = roi >= 0 ? 'var(--accent2)' : 'var(--danger)';
-
-  const wrEl = document.getElementById('kpi-winrate');
-  wrEl.textContent = d.win_rate.toFixed(0) + '%';
-  wrEl.className = 'kpi-value ' + (d.win_rate >= 55 ? 'green' : d.win_rate >= 45 ? '' : 'red');
-  setText('kpi-wl', d.wins + ' wins / ' + d.losses + ' losses');
-
-  setText('kpi-totalbets', d.total_bets);
-  setText('kpi-openbets', d.open_bets + ' open today');
-
-  const expEl = document.getElementById('kpi-exposure');
-  expEl.textContent = d.exposure_pct.toFixed(0) + '%';
-  expEl.className = 'kpi-value ' + (d.exposure_pct > 40 ? 'red' : 'yellow');
-
-  const statusMap = {
-    SLEEPING: { label: '💤 SLEEPING', cls: 'sleeping', kv: '#ffb347' },
-    MORNING:  { label: '🌅 MORNING',  cls: 'morning',  kv: '#00e5ff' },
-    EVENING:  { label: '🌙 EVENING',  cls: 'evening',  kv: '#7fff6e' },
-    STARTING: { label: '🔬 STARTING', cls: 'starting', kv: '#ff4d6d' },
-    HEALTHCHECK:{ label: '🔬 HEALTH', cls: 'healthcheck', kv: '#b47fff' },
-    IDLE:     { label: '⏸ IDLE',     cls: '',          kv: '#7a9ab0' },
-  };
-  const st = statusMap[d.status] || statusMap['IDLE'];
-  setText('kpi-status-val', st.label);
-  document.getElementById('kpi-status-val').style.color = st.kv;
-  setText('kpi-time', new Date(d.timestamp).toLocaleTimeString());
-
-  // Header status
-  setText('status-label', d.status);
-  const dot = document.getElementById('status-dot');
-  dot.className = 'status-dot ' + st.cls.toLowerCase();
-  setText('last-update', 'Updated ' + new Date().toLocaleTimeString());
-
-  // Ring
-  const pct = Math.min(d.exposure_pct, 100);
-  const circumference = 345.4;
-  const offset = circumference - (pct / 100) * circumference;
-  document.getElementById('ring-circle').style.strokeDashoffset = offset;
-  document.getElementById('ring-circle').style.stroke =
-    pct > 40 ? 'var(--danger)' : pct > 20 ? 'var(--warn)' : 'var(--accent)';
-  setText('ring-val', pct.toFixed(0) + '%');
-
-  // Gauges
-  const total = d.wins + d.losses + d.open_bets || 1;
-  setWidth('g-wins',   (d.wins    / total * 100) + '%');
-  setWidth('g-losses', (d.losses  / total * 100) + '%');
-  setWidth('g-open',   (d.open_bets / total * 100) + '%');
-  setText('gv-wins',   d.wins);
-  setText('gv-losses', d.losses);
-  setText('gv-open',   d.open_bets);
-}
-
-// ── Today's bets ──────────────────────────────────────────────────────────
-function updateTodayBets(bets) {
-  const container = document.getElementById('todays-bets-container');
-  const badge     = document.getElementById('today-count');
-  badge.textContent = bets.length + ' bet' + (bets.length !== 1 ? 's' : '');
-
-  if (!bets.length) {
-    container.innerHTML = '<div class="empty-state">No bets placed today yet</div>';
-    return;
+  // Opportunities
+  const tbody = document.getElementById('ops-tbody');
+  document.getElementById('ops-count').textContent = d.last_scan_ops.length;
+  if (d.last_scan_ops.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Sin datos del último scan</td></tr>';
+  } else {
+    tbody.innerHTML = d.last_scan_ops.map(op => {
+      const isBuy  = op.accion === 'COMPRAR';
+      const neaCls = isBuy ? 'nea-buy' : 'nea-avoid';
+      const actCls = isBuy ? 'action-buy' : 'action-avoid';
+      const actLbl = isBuy ? '🔥 COMPRAR' : '⚠️ EVITAR';
+      return `
+      <tr>
+        <td style="font-size:12px;color:var(--dim)">${op.partido}<br><span style="font-size:11px;color:var(--dim)">${op.hora}</span></td>
+        <td><strong>${op.equipo}</strong></td>
+        <td class="price-mono">${op.p_poly.toFixed(1)}¢</td>
+        <td class="price-mono" style="color:var(--gold)">${op.valor_real.toFixed(1)}¢</td>
+        <td class="${neaCls}">${op.nea > 0 ? '+' : ''}${op.nea.toFixed(1)}</td>
+        <td class="${actCls}">${actLbl}</td>
+      </tr>`;
+    }).join('');
   }
 
-  container.innerHTML = bets.map(b => {
-    const statusClass = b.status === 'OPEN' ? 'badge-open' : (b.pnl > 0 ? 'badge-win' : 'badge-loss');
-    const statusLabel = b.status === 'OPEN' ? 'OPEN' : (b.pnl > 0 ? 'WIN' : 'LOSS');
-    const neaColor    = b.nea_score < -5 ? 'var(--accent2)' : b.nea_score > 5 ? 'var(--danger)' : 'var(--warn)';
-    const pnlStr      = b.pnl !== null ? ((b.pnl >= 0 ? '+$' : '-$') + Math.abs(b.pnl).toFixed(2)) : '--';
-
-    return `
-    <div class="today-bet-card">
-      <div class="tbc-top">
-        <span class="tbc-teams">${b.away} <span style="color:var(--text-dim)">@</span> ${b.home}</span>
-        <span class="tbc-amount">$${b.amount_usd.toFixed(2)}</span>
-      </div>
-      <div class="tbc-meta">
-        <div class="tbc-item">
-          <span class="tbc-item-label">Bet On</span>
-          <span class="tbc-item-val" style="color:var(--accent)">${b.bet_on}</span>
-        </div>
-        <div class="tbc-item">
-          <span class="tbc-item-label">Price</span>
-          <span class="tbc-item-val">${b.poly_price}¢</span>
-        </div>
-        <div class="tbc-item">
-          <span class="tbc-item-label">NEA Score</span>
-          <span class="tbc-item-val" style="color:${neaColor}">${b.nea_score > 0 ? '+' : ''}${b.nea_score}</span>
-        </div>
-        <div class="tbc-item">
-          <span class="tbc-item-label">Status</span>
-          <span class="badge ${statusClass}">${statusLabel}</span>
-        </div>
-        <div class="tbc-item">
-          <span class="tbc-item-label">PnL</span>
-          <span class="tbc-item-val" style="color:${b.pnl > 0 ? 'var(--accent2)' : b.pnl < 0 ? 'var(--danger)' : 'var(--text-mid)'}">${pnlStr}</span>
-        </div>
-      </div>
-      ${b.rationale ? `<div class="tbc-rationale">${b.rationale}</div>` : ''}
-    </div>`;
-  }).join('');
-}
-
-// ── Bet history table ──────────────────────────────────────────────────────
-function updateBetHistory(bets) {
-  const tbody = document.getElementById('bet-history-body');
-  if (!bets.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No bets yet</td></tr>';
-    return;
+  // Closed positions
+  const closedEl = document.getElementById('closed-positions');
+  document.getElementById('closed-count').textContent = d.positions_closed.length;
+  if (d.positions_closed.length === 0) {
+    closedEl.innerHTML = '<div class="empty-state">Sin posiciones cerradas</div>';
+  } else {
+    closedEl.innerHTML = [...d.positions_closed].reverse().map(renderPosCard).join('');
   }
-
-  tbody.innerHTML = bets.map(b => {
-    const statusBadge = b.status === 'OPEN'
-      ? `<span class="badge badge-open">OPEN</span>`
-      : (b.pnl > 0 ? `<span class="badge badge-win">WIN</span>` : `<span class="badge badge-loss">LOSS</span>`);
-
-    const pnl = b.pnl !== null
-      ? `<span style="color:${b.pnl >= 0 ? 'var(--accent2)' : 'var(--danger)'}">
-           ${b.pnl >= 0 ? '+' : ''}$${Math.abs(b.pnl).toFixed(2)}
-         </span>`
-      : '<span style="color:var(--text-dim)">--</span>';
-
-    const neaColor = b.nea_score < -5 ? 'var(--accent2)' : b.nea_score > 5 ? 'var(--danger)' : 'var(--warn)';
-    const neaTrack = Math.min(Math.abs(b.nea_score) / 20 * 100, 100);
-
-    return `<tr>
-      <td style="color:var(--text-mid)">${b.date ? b.date.slice(5) : '--'}</td>
-      <td>${b.away} @ ${b.home}</td>
-      <td style="color:var(--accent)">${b.bet_on}</td>
-      <td>${b.poly_price}¢</td>
-      <td>
-        <div class="nea-bar">
-          <div class="nea-track">
-            <div class="nea-fill ${b.nea_score > 0 ? 'red' : ''}" style="width:${neaTrack}%"></div>
-          </div>
-          <span style="color:${neaColor};font-size:10px">${b.nea_score > 0 ? '+' : ''}${b.nea_score}</span>
-        </div>
-      </td>
-      <td style="color:var(--warn)">$${b.amount_usd.toFixed(2)}</td>
-      <td>${statusBadge}</td>
-      <td>${pnl}</td>
-    </tr>`;
-  }).join('');
 }
 
-// ── Log ────────────────────────────────────────────────────────────────────
-function updateLog(lines) {
-  const terminal = document.getElementById('log-terminal');
-  const badge    = document.getElementById('log-badge');
-  badge.textContent = lines.length + ' lines';
-
-  const classify = line => {
-    const l = line.toLowerCase();
-    if (l.includes('✅') || l.includes('won') || l.includes('health check passed')) return 'success';
-    if (l.includes('❌') || l.includes('error') || l.includes('failed'))           return 'error';
-    if (l.includes('⚠') || l.includes('warning') || l.includes('warn'))           return 'warning';
-    if (l.includes('bet placed') || l.includes('bet:') || l.includes('🏀'))        return 'bet';
-    if (l.includes('sleeping') || l.includes('still sleeping') || l.includes('💤')) return 'sleep';
-    if (l.includes('session') || l.includes('🌅') || l.includes('🌙'))             return 'session';
-    return 'info';
-  };
-
-  const html = lines.map(line =>
-    `<span class="log-line ${classify(line)}">${escHtml(line)}</span>`
-  ).join('\n');
-
-  terminal.innerHTML = html;
-  terminal.scrollTop = terminal.scrollHeight;
-}
-
-// ── Fetch & render ─────────────────────────────────────────────────────────
-async function fetchState() {
+async function fetchData() {
   try {
-    const res  = await fetch('/api/state');
-    const data = await res.json();
-
-    updateKPIs(data);
-    updateTodayBets(data.todays_bets || []);
-    updateBetHistory(data.all_bets   || []);
-
-    pnlHistory = data.pnl_history || [];
-    document.getElementById('chart-badge').textContent =
-      (data.total_pnl >= 0 ? '+$' : '-$') + Math.abs(data.total_pnl).toFixed(2);
-    drawChart(pnlHistory);
+    const resp = await fetch('/api/data');
+    const d = await resp.json();
+    render(d);
   } catch (e) {
-    console.error('State fetch error:', e);
-    setText('status-label', 'OFFLINE');
-    document.getElementById('status-dot').className = 'status-dot starting';
+    console.error('Error fetching data', e);
   }
 }
 
-async function fetchLog() {
-  try {
-    const res  = await fetch('/api/log');
-    const data = await res.json();
-    updateLog(data.lines || []);
-  } catch (e) {
-    console.error('Log fetch error:', e);
-  }
-}
-
-// ── Utils ──────────────────────────────────────────────────────────────────
-function setText(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
-}
-function setClass(id, cls) {
-  const el = document.getElementById(id);
-  if (el) el.className = cls;
-}
-function setWidth(id, w) {
-  const el = document.getElementById(id);
-  if (el) el.style.width = w;
-}
-function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-// ── Manual trigger ────────────────────────────────────────────────────────
-async function triggerMorning() {
-  const btn = document.getElementById('trigger-btn');
-  btn.textContent = '⏳ Buscando...';
+async function triggerScan() {
+  const btn = document.getElementById('scan-btn');
   btn.disabled = true;
-  btn.style.opacity = '0.6';
-
+  btn.textContent = '⏳ SCANNING...';
   try {
-    const res  = await fetch('/api/trigger-morning', { method: 'POST' });
-    const data = await res.json();
-
-    if (data.ok) {
-      btn.textContent = '✅ Señal Enviada';
-      btn.style.borderColor = 'rgba(127,255,110,0.5)';
-      btn.style.color = 'var(--accent2)';
-      // Refrescar logs en 3s para ver la actividad
-      setTimeout(() => { fetchLog(); fetchState(); }, 3000);
-      setTimeout(() => { fetchLog(); fetchState(); }, 8000);
-    } else {
-      btn.textContent = '❌ Error';
-      btn.style.color = 'var(--danger)';
+    const resp = await fetch('/api/scan', { method: 'POST' });
+    const data = await resp.json();
+    if (!data.ok) {
+      showNotif('⚠️ ' + data.message);
+      btn.disabled = false;
+      btn.textContent = '⚡ SCAN NOW';
+      return;
     }
-  } catch (e) {
-    btn.textContent = '❌ Error de red';
-    btn.style.color = 'var(--danger)';
-  }
-
-  // Restaurar botón después de 8s
-  setTimeout(() => {
-    btn.textContent = '🔍 Buscar Apuestas';
+    showNotif('🔍 Scan iniciado — analizando partidos con Gemini...');
+    // Polling hasta que el scan termine
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch('/api/data');
+        const d = await r.json();
+        if (!d.scan_running) {
+          clearInterval(poll);
+          render(d);
+          btn.disabled = false;
+          btn.textContent = '⚡ SCAN NOW';
+          showNotif('✅ Scan completado — ' + (d.last_scan_ops.length) + ' oportunidades encontradas');
+        }
+      } catch {}
+    }, 5000);
+  } catch {
+    showNotif('❌ Error al iniciar scan');
     btn.disabled = false;
-    btn.style.opacity = '1';
-    btn.style.borderColor = 'rgba(0,229,255,0.4)';
-    btn.style.color = 'var(--accent)';
-    btn.style.background = 'rgba(0,229,255,0.1)';
-  }, 8000);
+    btn.textContent = '⚡ SCAN NOW';
+  }
 }
 
-// ── Boot ───────────────────────────────────────────────────────────────────
-window.addEventListener('load', () => {
-  initCanvas();
-  fetchState();
-  fetchLog();
+function showNotif(msg) {
+  const el = document.getElementById('notif');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 4000);
+}
 
-  // Refresh state every 15s, log every 8s
-  setInterval(fetchState, 15000);
-  setInterval(fetchLog,    8000);
+// Clock ET
+function updateClock() {
+  const et = new Date().toLocaleString('en', {timeZone:'America/New_York', hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  document.getElementById('clock').textContent = et + ' ET';
+}
 
-  window.addEventListener('resize', () => {
-    initCanvas();
-    drawChart(pnlHistory);
-  });
-});
+// Init
+fetchData();
+setInterval(fetchData, 60000);  // refresh cada 60s
+updateClock();
+setInterval(updateClock, 1000);
 </script>
 </body>
 </html>
+"""
+
+
+@app.route("/")
+def index():
+    return DASHBOARD_HTML
+
+
+if __name__ == "__main__":
+    # Iniciar scheduler del bot
+    bot.iniciar_scheduler()
+    app.run(host="0.0.0.0", port=PORT)
