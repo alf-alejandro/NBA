@@ -61,11 +61,21 @@ def compute_nea_breakdown(p_poly: float, p_vegas: float, n: float, v: float, r: 
         "r_normalized"   : round(r_norm, 1),
     }
 
+def get_threshold() -> float:
+    """Lee NEA_THRESHOLD desde Railway env. Default -6."""
+    import os
+    try:
+        return float(os.environ.get("NEA_THRESHOLD", "-6"))
+    except ValueError:
+        return -6.0
+
 def interpret_nea(nea: float) -> NEAResult:
     """
-    Umbral único: NEA < -8 = BUY. Todo lo demás = NO_BET.
+    Umbral configurable via variable de entorno NEA_THRESHOLD (default: -6).
+    NEA < threshold → BUY. Todo lo demás → NO_BET.
     """
-    if nea < -6:
+    threshold = get_threshold()
+    if nea < threshold:
         action, confidence = "BUY", "HIGH"
     else:
         action, confidence = "NO_BET", "NONE"
