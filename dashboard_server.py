@@ -116,6 +116,19 @@ def api_log():
     return jsonify({"lines": read_log(150)})
 
 
+@app.route("/api/trigger-morning", methods=["POST"])
+def trigger_morning():
+    """Dispara una sesión de búsqueda de apuestas manualmente."""
+    import subprocess, sys
+    try:
+        # Escribir un flag que el scheduler loop detecta
+        flag = get_portfolio_file().parent / ".trigger_morning"
+        flag.write_text("1")
+        return jsonify({"ok": True, "message": "Señal enviada — el bot buscará apuestas en los próximos segundos."})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
+
+
 @app.route("/")
 def index():
     html_path = Path(__file__).parent / "dashboard.html"
