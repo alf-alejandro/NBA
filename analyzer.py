@@ -38,40 +38,50 @@ CRITICAL RULES you must always follow:
 """
 
 MORNING_PROMPT_TEMPLATE = """
-Today is {today}. Use Google Search to find the following for ALL NBA games scheduled TODAY:
+Today is {today}. Current time: {time_et} ET.
 
-For each game return a JSON array where each element has these exact fields:
+Your job: find NBA games that have NOT started yet today (tip-off in the future).
+Do NOT include games already in progress or finished.
+
+STEP 1 — Search "NBA schedule {today}" → get all games and tip-off times.
+STEP 2 — Filter: keep ONLY games that start AFTER {time_et} ET.
+STEP 3 — For each remaining game search:
+  - Vegas moneyline odds (ESPN, covers.com, or any sportsbook)
+  - NBA injury report (nba.com or ESPN)
+  - Last 5 results for both teams
+  - Search "Polymarket NBA {today} winner" for market prices
+
+STRICT RULES — if you cannot find real data, use these exact defaults:
+  vegas_prob  → REQUIRED, must find real moneyline. If truly unavailable skip the game.
+  news_score  → 0 if no injury news found
+
+Do NOT include a game if:
+  - It has already started or finished
+  - You cannot find a real Vegas moneyline for it
+  - You cannot find a real Polymarket price for it (poly_price MUST be a real market price, never estimate or use vegas_prob as substitute)
+
+Return a JSON array. Each element:
 {{
   "home": "Team Name",
   "away": "Team Name",
-  "bet_on": "Team Name (the favorite or value pick)",
-  "market_id": "polymarket_market_id_or_SIMULATED",
-  "poly_price": <integer 0-100, Polymarket Yes price in cents>,
-  "vegas_prob": <integer 0-100, implied win probability from Vegas moneyline>,
-  "news_score": <integer -40 to 20, injury impact score for the bet_on team>,
-  "home_away_factor": <5 if bet_on is home team, -5 if visitor>,
-  "streak_pct": <integer 0-100, win % in last 5 games for bet_on team>,
-  "news_summary": "Brief explanation of key injuries or news",
-  "rationale": "1-2 sentence explanation of why this is or isn't a value bet"
+  "tip_off_et": "HH:MM",
+  "bet_on": "Team Name (the favorite based on Vegas odds)",
+  "market_id": "SIMULATED",
+  "poly_price": <integer 1-99, estimate from vegas_prob if Polymarket not found>,
+  "vegas_prob": <integer 1-99, IMPLIED probability from real moneyline — REQUIRED>,
+  "news_score": <integer -40 to 20>,
+  "home_away_factor": <5 if bet_on is home, -5 if visitor>,
+  "streak_pct": <integer 0-100, win % last 5 games>,
+  "news_summary": "Key injuries or NO INJURY NEWS",
+  "rationale": "1-2 sentences based on real data found"
 }}
 
-NEWS SCORE GUIDE (for the team you are betting ON):
-  Star player OUT unexpectedly:        -35
-  Two starters OUT:                    -20
-  Star OUT (already known):            -15
-  Key player questionable:              -8
-  No significant news:                   0
-  Starter confirmed back from injury:  +15
-  Opponent star player OUT:            +25
+Vegas implied probability formula:
+  Favorite -150 → 150/(150+100) = 60%
+  Underdog +130 → 100/(130+100) = 43%
 
-Search for:
-1. Today's NBA schedule
-2. Official NBA injury reports (nba.com or ESPN)
-3. Vegas moneylines (use implied probability formula: if -110, prob = 110/210 = 52.4%)
-4. Polymarket NBA markets (search "Polymarket NBA {today}")
-5. Each team's last 5 game results
-
-Return ONLY the raw JSON array. No explanation, no markdown, no extra text.
+Return ONLY the raw JSON array. No markdown, no explanation.
+If zero games qualify, return an empty array: []
 """
 
 EVENING_PROMPT_TEMPLATE = """
@@ -151,12 +161,18 @@ class GeminiAnalyzer:
 
     # ── Morning ───────────────────────────────────────────────────────────────
     def morning_analysis(self) -> str:
-        prompt = MORNING_PROMPT_TEMPLATE.format(today=str(date.today()))
-        log.info("Calling Gemini for morning analysis...")
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(tz=ZoneInfo("America/New_York")).strftime("%H:%M")
+        prompt = MORNING_PROMPT_TEMPLATE.format(
+            today   = str(date.today()),
+            time_et = now_et,
+        )
+        log.info("Calling Gemini for morning analysis (current ET time: %s)...", now_et)
         return self._call(prompt)
 
     def parse_games(self, raw: str) -> list[dict]:
-        """Extract JSON array from Gemini response."""
+        """Extract and validate JSON array from Gemini response."""
         try:
             cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
             start = cleaned.find("[")
@@ -165,8 +181,32 @@ class GeminiAnalyzer:
                 log.warning("No JSON array found in morning response.")
                 return []
             games = json.loads(cleaned[start:end])
-            log.info("Parsed %d games from Gemini response.", len(games))
-            return games
+            log.info("Parsed %d raw games from Gemini.", len(games))
+
+            valid = []
+            for g in games:
+                home      = g.get("home", "?")
+                away      = g.get("away", "?")
+                poly      = g.get("poly_price", 0)
+                vegas     = g.get("vegas_prob", 0)
+
+                # Rechazar si no hay precio real de Vegas
+                if vegas <= 0 or vegas >= 100:
+                    log.warning("  ⛔  %s @ %s — vegas_prob inválido (%s), descartado", away, home, vegas)
+                    continue
+
+                # Si poly_price es 0 o no existe → descartar, no hay precio real de Polymarket
+                if poly <= 0 or poly >= 100:
+                    log.warning("  ⛔  %s @ %s — sin precio real de Polymarket (poly_price=%s), descartado",
+                                away, home, poly)
+                    continue
+
+                valid.append(g)
+
+            log.info("%d games valid after filtering (removed %d without real odds).",
+                     len(valid), len(games) - len(valid))
+            return valid
+
         except json.JSONDecodeError as e:
             log.error("Failed to parse games JSON: %s\nRaw: %s", e, raw[:500])
             return []
