@@ -273,7 +273,7 @@ def run_evening(portfolio: Portfolio, analyzer: GeminiAnalyzer, poly: Polymarket
     log.info("  🌙  EVENING SESSION — %s  %s ET", date.today(), now_et().strftime("%H:%M"))
     log.info("=" * 60)
 
-    open_bets = portfolio.open_bets_today()
+    open_bets = portfolio.open_bets_all()
     if not open_bets:
         log.info("No open bets to resolve tonight.")
         portfolio.print_summary()
