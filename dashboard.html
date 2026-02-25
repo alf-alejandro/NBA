@@ -538,6 +538,22 @@
       <span id="status-label">CONNECTING...</span>
     </div>
     <div id="last-update">--</div>
+    <button id="trigger-btn" onclick="triggerMorning()" style="
+      background: rgba(0,229,255,0.1);
+      border: 1px solid rgba(0,229,255,0.4);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      padding: 7px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all .2s;
+      text-transform: uppercase;
+    " onmouseover="this.style.background='rgba(0,229,255,0.2)'"
+       onmouseout="this.style.background='rgba(0,229,255,0.1)'">
+      🔍 Buscar Apuestas
+    </button>
   </div>
 </header>
 
@@ -1041,6 +1057,44 @@ function setWidth(id, w) {
 }
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Manual trigger ────────────────────────────────────────────────────────
+async function triggerMorning() {
+  const btn = document.getElementById('trigger-btn');
+  btn.textContent = '⏳ Buscando...';
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+
+  try {
+    const res  = await fetch('/api/trigger-morning', { method: 'POST' });
+    const data = await res.json();
+
+    if (data.ok) {
+      btn.textContent = '✅ Señal Enviada';
+      btn.style.borderColor = 'rgba(127,255,110,0.5)';
+      btn.style.color = 'var(--accent2)';
+      // Refrescar logs en 3s para ver la actividad
+      setTimeout(() => { fetchLog(); fetchState(); }, 3000);
+      setTimeout(() => { fetchLog(); fetchState(); }, 8000);
+    } else {
+      btn.textContent = '❌ Error';
+      btn.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    btn.textContent = '❌ Error de red';
+    btn.style.color = 'var(--danger)';
+  }
+
+  // Restaurar botón después de 8s
+  setTimeout(() => {
+    btn.textContent = '🔍 Buscar Apuestas';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.borderColor = 'rgba(0,229,255,0.4)';
+    btn.style.color = 'var(--accent)';
+    btn.style.background = 'rgba(0,229,255,0.1)';
+  }, 8000);
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────────
