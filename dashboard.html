@@ -917,7 +917,8 @@ def index():
     return DASHBOARD_HTML
 
 
+# Iniciar scheduler al cargar el módulo (funciona con Gunicorn y con python directo)
+bot.iniciar_scheduler()
+
 if __name__ == "__main__":
-    # Iniciar scheduler del bot
-    bot.iniciar_scheduler()
     app.run(host="0.0.0.0", port=PORT)
