@@ -39,49 +39,53 @@ CRITICAL RULES you must always follow:
 
 MORNING_PROMPT_TEMPLATE = """
 Today is {today}. Current time: {time_et} ET.
+Target date for bets: {target_date}.
 
-Your job: find NBA games that have NOT started yet today (tip-off in the future).
-Do NOT include games already in progress or finished.
+Your job: find ALL NBA games scheduled for {target_date} that have NOT started yet.
 
-STEP 1 — Search "NBA schedule {today}" → get all games and tip-off times.
-STEP 2 — Filter: keep ONLY games that start AFTER {time_et} ET.
-STEP 3 — For each remaining game search:
-  - Vegas moneyline odds (ESPN, covers.com, or any sportsbook)
-  - NBA injury report (nba.com or ESPN)
-  - Last 5 results for both teams
-  - Search "Polymarket NBA {today} winner" for market prices
+STEP 1 — Search these queries to get the full schedule:
+  - "NBA games {target_date}"
+  - "NBA schedule {target_date}"
+  List EVERY game found, there should be between 5 and 15 games on most days.
 
-STRICT RULES — if you cannot find real data, use these exact defaults:
-  vegas_prob  → REQUIRED, must find real moneyline. If truly unavailable skip the game.
-  news_score  → 0 if no injury news found
+STEP 2 — For EACH game on the {target_date} schedule, search:
+  - "NBA {away} vs {home} odds {target_date}" → Vegas moneyline
+  - "NBA injury report {target_date}" → injury status for both teams
+  - "{away} {home} last 5 games" → recent form
+  - "Polymarket NBA {home} win {target_date}" → Polymarket market price
 
-Do NOT include a game if:
-  - It has already started or finished
-  - You cannot find a real Vegas moneyline for it
-  - You cannot find a real Polymarket price for it (poly_price MUST be a real market price, never estimate or use vegas_prob as substitute)
+STEP 3 — Apply filters:
+  - EXCLUDE games that have already started or finished (tip-off before {time_et} ET if date is today)
+  - EXCLUDE games where you cannot find ANY Vegas moneyline odds
+  - EXCLUDE games where you cannot find a Polymarket market price
+  - For poly_price: use the REAL Polymarket "Yes" price in cents (e.g. 60 means 60 cents = 60%)
+  - Do NOT substitute poly_price with vegas_prob
 
-Return a JSON array. Each element:
+IMPORTANT: Search ALL games on the slate, not just the featured matchup.
+Most NBA days have 8-12 games. Find them all, then filter.
+
+Return a JSON array — one entry per qualifying game:
 {{
   "home": "Team Name",
   "away": "Team Name",
+  "game_date": "{target_date}",
   "tip_off_et": "HH:MM",
-  "bet_on": "Team Name (the favorite based on Vegas odds)",
+  "bet_on": "Team Name (Vegas favorite)",
   "market_id": "SIMULATED",
-  "poly_price": <integer 1-99, estimate from vegas_prob if Polymarket not found>,
-  "vegas_prob": <integer 1-99, IMPLIED probability from real moneyline — REQUIRED>,
-  "news_score": <integer -40 to 20>,
+  "poly_price": <integer 1-99, real Polymarket price>,
+  "vegas_prob": <integer 1-99, implied prob from moneyline>,
+  "news_score": <integer -40 to 20, 0 if no news>,
   "home_away_factor": <5 if bet_on is home, -5 if visitor>,
-  "streak_pct": <integer 0-100, win % last 5 games>,
+  "streak_pct": <integer 0-100>,
   "news_summary": "Key injuries or NO INJURY NEWS",
-  "rationale": "1-2 sentences based on real data found"
+  "rationale": "1-2 sentences"
 }}
 
-Vegas implied probability formula:
-  Favorite -150 → 150/(150+100) = 60%
-  Underdog +130 → 100/(130+100) = 43%
+Vegas implied probability:
+  Favorite -150 → 150/250 = 60%
+  Underdog +130 → 100/230 = 43%
 
-Return ONLY the raw JSON array. No markdown, no explanation.
-If zero games qualify, return an empty array: []
+Return ONLY the raw JSON array. No markdown. If none qualify: []
 """
 
 EVENING_PROMPT_TEMPLATE = """
@@ -162,14 +166,21 @@ class GeminiAnalyzer:
 
     # ── Morning ───────────────────────────────────────────────────────────────
     def morning_analysis(self) -> str:
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
-        now_et = datetime.now(tz=ZoneInfo("America/New_York")).strftime("%H:%M")
+        now_et    = datetime.now(tz=ZoneInfo("America/New_York"))
+        time_str  = now_et.strftime("%H:%M")
+        today     = str(now_et.date())
+        tomorrow  = str((now_et + timedelta(days=1)).date())
+        # Si ya es tarde (>14:00 ET), buscar juegos de mañana
+        target    = tomorrow if now_et.hour >= 14 else today
         prompt = MORNING_PROMPT_TEMPLATE.format(
-            today   = str(date.today()),
-            time_et = now_et,
+            today       = today,
+            tomorrow    = tomorrow,
+            target_date = target,
+            time_et     = time_str,
         )
-        log.info("Calling Gemini for morning analysis (current ET time: %s)...", now_et)
+        log.info("Calling Gemini — ET: %s | searching games for: %s", time_str, target)
         return self._call(prompt)
 
     def parse_games(self, raw: str) -> list[dict]:
