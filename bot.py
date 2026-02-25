@@ -16,7 +16,7 @@ Env vars:
   SIMULATE          → "true" (default) | "false"
   DATA_DIR          → directorio persistente, ej. /data  (default: directorio actual)
   DASHBOARD_PORT    → puerto del dashboard (default: 8080)
-  FORCE_MODE        → "morning" | "evening" | "healthcheck"  (debug override)
+  FORCE_MODE        → "morning" | "evening"  (debug override)
 """
 
 import os
@@ -31,7 +31,6 @@ from analyzer import GeminiAnalyzer
 from portfolio import Portfolio
 from polymarket import PolymarketClient
 from nea_formula import compute_nea, compute_nea_breakdown, interpret_nea
-from healthcheck import run_health_check
 from dashboard_server import start_dashboard
 
 # ── Data directory (persistente en Railway via Volume montado en /data) ───────
@@ -39,7 +38,6 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", ".")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 PORTFOLIO_FILE  = str(DATA_DIR / "portfolio.json")
-HEALTH_FLAG     = str(DATA_DIR / ".health_ok")
 FIRST_RUN_FLAG  = str(DATA_DIR / ".first_run_done")
 LOG_FILE        = str(DATA_DIR / "bot.log")
 
@@ -93,7 +91,7 @@ def is_in_window(start_h: int, end_h: int) -> bool:
 
 def determine_current_window() -> str:
     force = os.environ.get("FORCE_MODE", "").lower()
-    if force in ("morning", "evening", "healthcheck"):
+    if force in ("morning", "evening"):
         return force
     hour = now_et().hour
     if MORNING_HOUR_START <= hour < MORNING_HOUR_END:
@@ -171,7 +169,7 @@ def run_morning(portfolio: Portfolio, analyzer: GeminiAnalyzer, poly: Polymarket
         log.info("  💡  %s", game.get("rationale",    "—"))
 
         if signal["action"] != "BUY":
-            log.info("  ⏭   Sin ventaja (NEA=%+.2f, umbral BUY < -3) — descartado", nea_score)
+            log.info("  ⏭   NEA=%+.2f — no alcanza umbral de -8, descartado", nea_score)
         else:
             candidates.append({**game, "nea_score": nea_score, "signal": signal, "home": home, "away": away})
             log.info("  ✅  Candidato BUY — se calculará el monto después")
@@ -368,23 +366,9 @@ def main():
     analyzer = GeminiAnalyzer(gemini_key)
     poly     = PolymarketClient(gamma_key)
 
-    # ── Health check ──────────────────────────────────────────────────────
-    force_mode  = os.environ.get("FORCE_MODE", "").lower()
-    health_flag = Path(HEALTH_FLAG)
-
-    if not health_flag.exists() or force_mode == "healthcheck":
-        log.info("🔬  Running startup health check...")
-        healthy = run_health_check(analyzer, portfolio)
-        if healthy:
-            health_flag.write_text(str(datetime.now()))
-            log.info("✅  Health check passed.")
-        else:
-            log.error("❌  Health check FAILED — bot continues but check your config.")
-    else:
-        log.info("✅  Health flag found — skipping check.")
-
     # ── First boot bet (fuera de horario, solo primera vez) ───────────────
-    window = determine_current_window()
+    force_mode   = os.environ.get("FORCE_MODE", "").lower()
+    window       = determine_current_window()
     is_off_hours = window in ("sleep_until_morning", "sleep_until_evening")
 
     if is_off_hours and force_mode not in ("morning", "evening"):
