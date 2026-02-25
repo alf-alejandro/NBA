@@ -115,7 +115,6 @@ class GeminiAnalyzer:
         tools  = [types.Tool(googleSearch=types.GoogleSearch())]
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
-            thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
             tools=tools,
         )
 
