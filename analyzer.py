@@ -102,7 +102,7 @@ Return ONLY raw JSON. No markdown, no extra text.
 class GeminiAnalyzer:
     def __init__(self, api_key: str):
         self.client = genai.Client(api_key=api_key)
-        self.model  = "gemini-3.1-pro-preview"
+        self.model  = "gemini-flash-lite-latest"
 
     def _call(self, prompt: str, max_retries: int = 4) -> str:
         """Call Gemini with Google Search grounding, HIGH thinking, and retry on 429."""
