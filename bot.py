@@ -354,6 +354,7 @@ def main():
         raise EnvironmentError("❌  GEMINI_API_KEY not set.")
 
     log.info("📁  Data directory: %s", DATA_DIR)
+    log.info("🎯  NEA threshold: %.1f (env NEA_THRESHOLD)", float(os.environ.get("NEA_THRESHOLD", "-6")))
 
     # Inyectar DATA_DIR al dashboard server para que lea los archivos correctos
     os.environ["PORTFOLIO_FILE"] = PORTFOLIO_FILE
